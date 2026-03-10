@@ -15,7 +15,7 @@ fn make_mem_state(chan_id: u32) -> impl FnMut(Arc<dyn EvidenceSink>) -> (Channel
         let io: Box<dyn DynChannel> = Box::new(MemDatagramChannel::new());
         let flush = FlushPolicy::default().budget(64 * 1024);
         (
-            ChannelState::new(chan_id, io, 10, 5, flush, sink),
+            ChannelState::new(chan_id, io, 10, 5, usize::MAX, flush, sink),
             Box::new(()), // no keepalive needed
         )
     }
@@ -40,7 +40,7 @@ fn make_tcp_state(chan_id: u32) -> impl FnMut(Arc<dyn EvidenceSink>) -> (Channel
         let flush = FlushPolicy::default().budget(64 * 1024);
 
         (
-            ChannelState::new(chan_id, io, 10, 5, flush, sink),
+            ChannelState::new(chan_id, io, 10, 5, usize::MAX, flush, sink),
             Box::new(client) as KeepAlive,
         )
     }
@@ -63,7 +63,7 @@ fn make_udp_state(chan_id: u32) -> impl FnMut(Arc<dyn EvidenceSink>) -> (Channel
         let flush = FlushPolicy::default().budget(64 * 1024);
 
         (
-            ChannelState::new(chan_id, io, 10, 5, flush, sink),
+            ChannelState::new(chan_id, io, 10, 5, usize::MAX, flush, sink),
             Box::new(b) as KeepAlive,
         )
     }

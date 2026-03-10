@@ -85,6 +85,8 @@ pub struct DataPlaneOptions {
     pub budget: Budget,
     /// Graceful draining timeout used when the dataplane enters shutdown.
     pub drain_timeout: Duration,
+    /// Hard cap for per-channel pending outbound bytes (`usize::MAX` keeps compatibility).
+    pub max_pending_write_bytes: usize,
     pub diagnostics: DataPlaneDiagnostics,
 }
 
@@ -132,6 +134,7 @@ impl DataPlaneOptions {
     pub fn normalized(mut self) -> Self {
         self.limits = self.limits.normalized();
         self.drain_timeout = self.drain_timeout.max(Duration::from_millis(1));
+        self.max_pending_write_bytes = self.max_pending_write_bytes.max(1);
         self
     }
 
@@ -226,6 +229,12 @@ impl DataPlaneOptions {
     }
 
     #[inline]
+    pub fn with_max_pending_write_bytes(mut self, max_pending_write_bytes: usize) -> Self {
+        self.max_pending_write_bytes = max_pending_write_bytes;
+        self
+    }
+
+    #[inline]
     pub fn with_diagnostics(mut self, diagnostics: DataPlaneDiagnostics) -> Self {
         self.diagnostics = diagnostics;
         self
@@ -262,6 +271,8 @@ pub struct DataPlaneConfig {
     pub max_accept_per_tick: usize,
     /// Graceful draining timeout used when the dataplane enters shutdown.
     pub drain_timeout: Duration,
+    /// Hard cap for per-channel pending outbound bytes (`usize::MAX` keeps compatibility).
+    pub max_pending_write_bytes: usize,
     /// Whether to emit best-effort evidence logs.
     pub emit_evidence_log: bool,
 }
@@ -312,6 +323,7 @@ impl DataPlaneConfig {
         self.max_channels = self.max_channels.max(1);
         self.max_accept_per_tick = self.max_accept_per_tick.max(1);
         self.drain_timeout = self.drain_timeout.max(Duration::from_millis(1));
+        self.max_pending_write_bytes = self.max_pending_write_bytes.max(1);
         self
     }
 
@@ -427,6 +439,13 @@ impl DataPlaneConfig {
         self
     }
 
+    /// Set pending outbound hard cap (Options-style).
+    #[inline]
+    pub fn with_max_pending_write_bytes(mut self, max_pending_write_bytes: usize) -> Self {
+        self.max_pending_write_bytes = max_pending_write_bytes;
+        self
+    }
+
     /// Set evidence logging (Options-style).
     #[inline]
     pub fn with_evidence_log(mut self, emit_evidence_log: bool) -> Self {
@@ -443,9 +462,13 @@ impl Default for DataPlaneConfig {
             watermark: WatermarkPolicy::default(),
             flush_policy: FlushPolicy::default(),
             framing: FrameDecoderProfile::line(64 * 1024),
-            budget: Budget { max_events: 256, max_nanos: 2_000_000 },
+            budget: Budget {
+                max_events: 256,
+                max_nanos: 2_000_000,
+            },
             max_accept_per_tick: 64,
             drain_timeout: Duration::from_secs(5),
+            max_pending_write_bytes: usize::MAX,
             emit_evidence_log: false,
         }
     }
@@ -464,6 +487,7 @@ impl From<DataPlaneOptions> for DataPlaneConfig {
             budget: value.budget,
             max_accept_per_tick: limits.max_accept_per_tick,
             drain_timeout: value.drain_timeout.max(Duration::from_millis(1)),
+            max_pending_write_bytes: value.max_pending_write_bytes.max(1),
             emit_evidence_log: value.diagnostics.emit_evidence_log,
         }
     }
@@ -483,13 +507,13 @@ impl From<DataPlaneConfig> for DataPlaneOptions {
             framing: value.framing,
             budget: value.budget,
             drain_timeout: value.drain_timeout,
+            max_pending_write_bytes: value.max_pending_write_bytes,
             diagnostics: DataPlaneDiagnostics {
                 emit_evidence_log: value.emit_evidence_log,
             },
         }
     }
 }
-
 
 #[cfg(test)]
 mod tests {
@@ -504,11 +528,13 @@ mod tests {
             .with_max_channels(0)
             .with_max_accept_per_tick(0)
             .with_drain_timeout(Duration::ZERO)
+            .with_max_pending_write_bytes(0)
             .build();
 
         assert_eq!(cfg.max_channels, 1);
         assert_eq!(cfg.max_accept_per_tick, 1);
         assert_eq!(cfg.drain_timeout, Duration::from_millis(1));
+        assert_eq!(cfg.max_pending_write_bytes, 1);
         assert!(cfg.validate().is_ok());
     }
 
@@ -520,7 +546,10 @@ mod tests {
             low_mul: 4,
         });
 
-        assert_eq!(cfg.validate(), Err(DataPlaneConfigError::InvalidWatermarkPolicy));
+        assert_eq!(
+            cfg.validate(),
+            Err(DataPlaneConfigError::InvalidWatermarkPolicy)
+        );
     }
 
     #[test]
@@ -533,7 +562,10 @@ mod tests {
             max_iov: 8,
         });
 
-        assert_eq!(cfg.validate(), Err(DataPlaneConfigError::InvalidFlushPolicy));
+        assert_eq!(
+            cfg.validate(),
+            Err(DataPlaneConfigError::InvalidFlushPolicy)
+        );
     }
 
     #[test]
@@ -565,7 +597,13 @@ mod tests {
     #[test]
     fn dataplane_perf_tcp_helper_matches_overlay() {
         let bind = "127.0.0.1:26060".parse().expect("static addr");
-        assert_eq!(DataPlaneConfig::perf_tcp(bind), DataPlaneConfig::tcp(bind).with_perf_defaults());
-        assert_eq!(DataPlaneOptions::perf_tcp(bind).build(), DataPlaneConfig::perf_tcp(bind));
+        assert_eq!(
+            DataPlaneConfig::perf_tcp(bind),
+            DataPlaneConfig::tcp(bind).with_perf_defaults()
+        );
+        assert_eq!(
+            DataPlaneOptions::perf_tcp(bind).build(),
+            DataPlaneConfig::perf_tcp(bind)
+        );
     }
 }

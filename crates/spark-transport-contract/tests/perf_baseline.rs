@@ -1,10 +1,10 @@
 use std::time::Instant;
 
-use spark_buffer::Bytes;
+use spark_buffer::{Bytes, Cumulation};
 use spark_transport::async_bridge::contract::{FlushStatus, OutboundBuffer};
 use spark_transport::async_bridge::OutboundFrame;
-use spark_transport::DataPlaneMetrics;
 use spark_transport::policy::FlushBudget;
+use spark_transport::DataPlaneMetrics;
 
 use spark_transport_contract::fake_io::ScriptedIo;
 
@@ -25,14 +25,15 @@ fn outbound_buffer_perf_smoke_reports_baseline() {
     let mut ob = OutboundBuffer::new(8 * 1024 * 1024, 4 * 1024 * 1024);
     for _ in 0..FRAMES {
         let bytes = Bytes::from(vec![0u8; FRAME_BYTES]);
-        ob.enqueue(OutboundFrame::from_bytes(bytes));
+        assert!(ob.enqueue(OutboundFrame::from_bytes(bytes)).is_ok());
     }
 
     let mut io = ScriptedIo::new();
     io.add_allowance(total_bytes.saturating_mul(2));
 
     // DECISION: use `FlushBudget::new()` (non-exhaustive) to keep this test resilient as the budget evolves.
-    let budget = FlushBudget::new(total_bytes.saturating_mul(2), FRAMES.saturating_mul(2)).with_max_iov(16);
+    let budget =
+        FlushBudget::new(total_bytes.saturating_mul(2), FRAMES.saturating_mul(2)).with_max_iov(16);
 
     let metrics = DataPlaneMetrics::default();
     let base = metrics.snapshot();
@@ -46,16 +47,28 @@ fn outbound_buffer_perf_smoke_reports_baseline() {
     let derived = interval.derive();
     let seconds = elapsed.as_secs_f64().max(f64::EPSILON);
     let mib_per_sec = interval.write_bytes_total as f64 / (1024.0 * 1024.0) / seconds;
+    let outbound_ev = ob.alloc_evidence();
+
+    let mut cum = Cumulation::with_capacity(1);
+    for _ in 0..16 {
+        cum.push_bytes(&[0u8; 1024]);
+    }
+    let cum_ev = cum.alloc_evidence();
 
     println!(
-        "SPARK_PERF tx_bytes={} elapsed_ms={:.3} mib_per_sec={:.3} syscalls={} writev_calls={} syscalls_per_kib={:.6} writev_share={:.6}",
+        "SPARK_PERF tx_bytes={} elapsed_ms={:.3} mib_per_sec={:.3} syscalls={} writev_calls={} syscalls_per_kib={:.6} writev_share={:.6} ob_q_growth={} ob_peak_queue_len={} ob_peak_pending_bytes={} cum_tail_growth={} cum_tail_peak_capacity={}",
         interval.write_bytes_total,
         elapsed.as_secs_f64() * 1000.0,
         mib_per_sec,
         interval.write_syscalls_total,
         interval.write_writev_calls_total,
         derived.write_syscalls_per_kib,
-        derived.write_writev_share_ratio
+        derived.write_writev_share_ratio,
+        outbound_ev.queue_capacity_growth_count,
+        outbound_ev.peak_queue_len,
+        outbound_ev.peak_pending_bytes,
+        cum_ev.tail_capacity_growth_count,
+        cum_ev.tail_peak_capacity,
     );
 
     assert_eq!(status, FlushStatus::Drained);

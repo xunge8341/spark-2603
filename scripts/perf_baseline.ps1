@@ -32,4 +32,5 @@ Invoke-Step "[2/2] cargo test -p spark-transport-contract --test perf_baseline -
   cargo test -p spark-transport-contract --test perf_baseline -- --ignored --nocapture
 }
 
+Write-Host "Note: SPARK_PERF line now includes alloc evidence (outbound/cumulation growth + peak)." -ForegroundColor DarkCyan
 Write-Host "OK: perf baseline completed." -ForegroundColor Green

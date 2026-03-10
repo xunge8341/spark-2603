@@ -2,12 +2,12 @@ use crate::async_bridge::OutboundFrame;
 
 use crate::{KernelError, Result};
 
-use crate::evidence::EvidenceSink;
 use super::super::dyn_channel::DynChannel;
+use crate::evidence::EvidenceSink;
 
+use super::super::channel_state::ChannelState;
 use super::context::ChannelHandlerContext;
 use super::handler::ChannelHandler;
-use super::super::channel_state::ChannelState;
 
 /// pipeline 的 head handler（Netty/DotNetty：HeadContext）。
 ///
@@ -22,7 +22,6 @@ where
     Ev: EvidenceSink,
     Io: DynChannel,
 {
-
     fn channel_inactive(
         &mut self,
         ctx: &mut dyn ChannelHandlerContext<A>,
@@ -33,7 +32,6 @@ where
         ctx.fire_channel_inactive()
     }
 
-
     fn write(
         &mut self,
         ctx: &mut dyn ChannelHandlerContext<A>,
@@ -41,7 +39,7 @@ where
         msg: OutboundFrame,
     ) -> Result<()> {
         // 语义：enqueue（不在这里做 syscalls）。
-        state.enqueue_outbound(msg);
+        state.enqueue_outbound(msg)?;
         // outbound 继续向前传播到更“底层”的 handler 已无意义，因此直接返回。
         // 如果未来引入真正的 TransportWriter（负责 writev/drain），可以在此处继续向前。
         let _ = ctx; // 保持接口一致（未来扩展）。

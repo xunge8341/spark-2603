@@ -26,7 +26,19 @@ pub struct OutboundBuffer {
 
     high: usize,
     low: usize,
+    max_pending_write_bytes: usize,
     writable: bool,
+
+    queue_capacity_growth_count: u64,
+    peak_queue_len: usize,
+    peak_pending_bytes: usize,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct OutboundAllocEvidence {
+    pub queue_capacity_growth_count: u64,
+    pub peak_queue_len: usize,
+    pub peak_pending_bytes: usize,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -73,6 +85,10 @@ pub enum WritabilityChange {
 
 impl OutboundBuffer {
     pub fn new(high: usize, low: usize) -> Self {
+        Self::new_with_cap(high, low, usize::MAX)
+    }
+
+    pub fn new_with_cap(high: usize, low: usize, max_pending_write_bytes: usize) -> Self {
         debug_assert!(high >= low);
         Self {
             q: VecDeque::new(),
@@ -81,7 +97,11 @@ impl OutboundBuffer {
             bytes_total: 0,
             high: high.max(1),
             low: low.min(high).max(0),
+            max_pending_write_bytes,
             writable: true,
+            queue_capacity_growth_count: 0,
+            peak_queue_len: 0,
+            peak_pending_bytes: 0,
         }
     }
 
@@ -101,10 +121,36 @@ impl OutboundBuffer {
         self.writable
     }
 
-    pub fn enqueue(&mut self, frame: OutboundFrame) -> WritabilityChange {
+    pub fn enqueue(&mut self, frame: OutboundFrame) -> crate::Result<WritabilityChange> {
+        if frame.len()
+            > self
+                .max_pending_write_bytes
+                .saturating_sub(self.bytes_total)
+        {
+            return Err(KernelError::NoMem);
+        }
+
         self.bytes_total = self.bytes_total.saturating_add(frame.len());
+        self.peak_pending_bytes = self.peak_pending_bytes.max(self.bytes_total);
+
+        let cap_before = self.q.capacity();
         self.q.push_back(frame);
-        self.recompute_writability()
+        let cap_after = self.q.capacity();
+        if cap_after > cap_before {
+            self.queue_capacity_growth_count = self.queue_capacity_growth_count.saturating_add(1);
+        }
+
+        self.peak_queue_len = self.peak_queue_len.max(self.q.len());
+        Ok(self.recompute_writability())
+    }
+
+    #[inline]
+    pub fn alloc_evidence(&self) -> OutboundAllocEvidence {
+        OutboundAllocEvidence {
+            queue_capacity_growth_count: self.queue_capacity_growth_count,
+            peak_queue_len: self.peak_queue_len,
+            peak_pending_bytes: self.peak_pending_bytes,
+        }
     }
 
     fn recompute_writability(&mut self) -> WritabilityChange {
@@ -333,5 +379,57 @@ impl OutboundBuffer {
 
         let wc = self.recompute_writability();
         (FlushStatus::Drained, total, syscalls, writev_calls, wc)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::OutboundAllocEvidence;
+    use super::{OutboundBuffer, WritabilityChange};
+    use crate::async_bridge::OutboundFrame;
+    use spark_buffer::Bytes;
+
+    #[test]
+    fn enqueue_rejects_when_hard_cap_exceeded() {
+        let mut ob = OutboundBuffer::new_with_cap(1024, 512, 8);
+        let first = OutboundFrame::from_bytes(Bytes::from(vec![1u8; 6]));
+        let second = OutboundFrame::from_bytes(Bytes::from(vec![2u8; 3]));
+
+        assert!(ob.enqueue(first).is_ok());
+        assert!(ob.enqueue(second).is_err());
+        assert_eq!(ob.bytes_total(), 6);
+    }
+
+    #[test]
+    fn alloc_evidence_tracks_growth_and_peaks() {
+        let mut ob = OutboundBuffer::new_with_cap(1024, 512, usize::MAX);
+        for _ in 0..32 {
+            let frame = OutboundFrame::from_bytes(Bytes::from(vec![0u8; 16]));
+            assert!(ob.enqueue(frame).is_ok());
+        }
+
+        let ev = ob.alloc_evidence();
+        assert!(ev.queue_capacity_growth_count > 0);
+        assert_eq!(ev.peak_queue_len, 32);
+        assert_eq!(ev.peak_pending_bytes, 32 * 16);
+        assert_eq!(
+            OutboundAllocEvidence {
+                queue_capacity_growth_count: ev.queue_capacity_growth_count,
+                peak_queue_len: ev.peak_queue_len,
+                peak_pending_bytes: ev.peak_pending_bytes,
+            },
+            ev
+        );
+    }
+
+    #[test]
+    fn enqueue_returns_writability_change_when_crossing_high() {
+        let mut ob = OutboundBuffer::new_with_cap(8, 4, 64);
+        let frame = OutboundFrame::from_bytes(Bytes::from(vec![0u8; 8]));
+        let wc = match ob.enqueue(frame) {
+            Ok(v) => v,
+            Err(e) => panic!("unexpected enqueue error: {:?}", e),
+        };
+        assert_eq!(wc, WritabilityChange::BecameUnwritable { pending_bytes: 8 });
     }
 }

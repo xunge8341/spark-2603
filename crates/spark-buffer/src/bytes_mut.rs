@@ -18,6 +18,14 @@ use crate::Bytes;
 pub struct BytesMut {
     buf: Vec<u8>,
     start: usize,
+    capacity_growth_count: u64,
+    peak_capacity: usize,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct BytesMutAllocEvidence {
+    pub capacity_growth_count: u64,
+    pub peak_capacity: usize,
 }
 
 impl BytesMut {
@@ -26,6 +34,8 @@ impl BytesMut {
         Self {
             buf: Vec::with_capacity(cap),
             start: 0,
+            capacity_growth_count: 0,
+            peak_capacity: cap,
         }
     }
 
@@ -45,6 +55,14 @@ impl BytesMut {
     }
 
     #[inline]
+    pub fn alloc_evidence(&self) -> BytesMutAllocEvidence {
+        BytesMutAllocEvidence {
+            capacity_growth_count: self.capacity_growth_count,
+            peak_capacity: self.peak_capacity.max(self.buf.capacity()),
+        }
+    }
+
+    #[inline]
     pub fn as_slice(&self) -> &[u8] {
         &self.buf[self.start..]
     }
@@ -58,7 +76,9 @@ impl BytesMut {
     /// Ensure the buffer can append at least `additional` bytes without reallocating.
     pub fn reserve(&mut self, additional: usize) {
         self.maybe_compact_for_append(additional);
+        let before = self.buf.capacity();
         self.buf.reserve(additional);
+        self.note_capacity_change(before);
     }
 
     /// Append bytes to the end of the live region.
@@ -67,7 +87,9 @@ impl BytesMut {
             return;
         }
         self.maybe_compact_for_append(bytes.len());
+        let before = self.buf.capacity();
         self.buf.extend_from_slice(bytes);
+        self.note_capacity_change(before);
     }
 
     /// Consume `n` bytes from the front of the live region.
@@ -125,6 +147,15 @@ impl BytesMut {
         let msg = Bytes::copy_from_slice(&self.as_slice()[..msg_end]);
         self.advance(consumed);
         msg
+    }
+
+    #[inline]
+    fn note_capacity_change(&mut self, before: usize) {
+        let after = self.buf.capacity();
+        if after > before {
+            self.capacity_growth_count = self.capacity_growth_count.saturating_add(1);
+        }
+        self.peak_capacity = self.peak_capacity.max(after);
     }
 
     fn maybe_compact_for_append(&mut self, incoming: usize) {
@@ -210,5 +241,14 @@ mod tests {
         let msg = b.take_message(5, 3);
         assert_eq!(msg.as_ref(), b"abc");
         assert_eq!(b.as_slice(), b"xyz");
+    }
+
+    #[test]
+    fn alloc_evidence_tracks_capacity_growth() {
+        let mut b = BytesMut::with_capacity(1);
+        b.extend_from_slice(&[0u8; 1024]);
+        let ev = b.alloc_evidence();
+        assert!(ev.capacity_growth_count > 0);
+        assert!(ev.peak_capacity >= 1024);
     }
 }

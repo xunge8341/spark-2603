@@ -168,13 +168,18 @@ where
         io: Io,
         high_watermark: usize,
         low_watermark: usize,
+        max_pending_write_bytes: usize,
         flush_budget: FlushBudget,
         evidence: Ev,
     ) -> Self {
         Self {
             chan_id,
             io,
-            outbound: OutboundBuffer::new(high_watermark, low_watermark),
+            outbound: OutboundBuffer::new_with_cap(
+                high_watermark,
+                low_watermark,
+                max_pending_write_bytes,
+            ),
             flush_budget,
             evidence,
             read_paused: false,
@@ -454,9 +459,10 @@ where
     /// 入队 outbound bytes（对应 Netty/DotNetty 的 `write()`）。
     ///
     /// 注意：这里只做排队与水位线更新，不做真正写出。
-    pub fn enqueue_outbound(&mut self, frame: OutboundFrame) {
-        let wc = self.outbound.enqueue(frame);
+    pub fn enqueue_outbound(&mut self, frame: OutboundFrame) -> Result<()> {
+        let wc = self.outbound.enqueue(frame)?;
         self.apply_writability_change(wc);
+        Ok(())
     }
 
     /// 尝试 drain outbound（对应 Netty/DotNetty 的 `flush()`）。

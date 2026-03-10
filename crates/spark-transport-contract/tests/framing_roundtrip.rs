@@ -7,9 +7,9 @@ use spark_core::context::Context as BizContext;
 use spark_core::service::Service;
 
 use spark_transport::async_bridge::channel::ChannelLimits;
+use spark_transport::async_bridge::contract::FlushStatus;
 use spark_transport::async_bridge::dyn_boundary::Channel;
 use spark_transport::async_bridge::{ByteOrder, DynChannel, FrameDecoderProfile};
-use spark_transport::async_bridge::contract::FlushStatus;
 use spark_transport::evidence::EvidenceSink;
 use spark_transport::io::{caps, ChannelCaps, IoOps, MsgBoundary, ReadOutcome};
 use spark_transport::policy::FlushPolicy;
@@ -27,7 +27,11 @@ impl Service<Bytes> for EchoService {
     type Response = Option<Bytes>;
     type Error = KernelError;
 
-    async fn call(&self, _context: BizContext, request: Bytes) -> core::result::Result<Self::Response, Self::Error> {
+    async fn call(
+        &self,
+        _context: BizContext,
+        request: Bytes,
+    ) -> core::result::Result<Self::Response, Self::Error> {
         Ok(Some(request))
     }
 }
@@ -169,10 +173,18 @@ fn drive_one_roundtrip(profile: FrameDecoderProfile, wire_in: &[u8], wire_out: &
         let sink_erased: Arc<dyn EvidenceSink> = sink.clone();
 
         let app = Arc::new(EchoService);
-        let limits = ChannelLimits::new(64 * 1024, 1024 * 1024, 512 * 1024);
+        let limits = ChannelLimits::new(64 * 1024, 1024 * 1024, 512 * 1024, usize::MAX);
         let flush = FlushPolicy::default().budget(limits.max_frame);
 
-        let mut ch = Channel::new_with_profile_and_flush_budget(1, io_box, profile, limits, flush, app, sink_erased);
+        let mut ch = Channel::new_with_profile_and_flush_budget(
+            1,
+            io_box,
+            profile,
+            limits,
+            flush,
+            app,
+            sink_erased,
+        );
 
         let mut read_buf = vec![0u8; chunk];
         let _ = ch.on_readable(&mut read_buf, 64).expect("on_readable");
@@ -197,7 +209,11 @@ fn drive_one_roundtrip(profile: FrameDecoderProfile, wire_in: &[u8], wire_out: &
             .expect("mem io")
             .take_written();
 
-        assert_eq!(written.as_slice(), wire_out, "profile={profile:?}, chunk={chunk}");
+        assert_eq!(
+            written.as_slice(),
+            wire_out,
+            "profile={profile:?}, chunk={chunk}"
+        );
     }
 }
 

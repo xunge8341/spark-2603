@@ -54,3 +54,18 @@
 - watermark 语义：`crates/spark-transport/src/policy/*` + `ChannelState` writability
 - cumulation tail：`crates/spark-buffer/src/cumulation.rs` + `crates/spark-buffer/src/bytes_mut.rs`
 - perf baseline：`perf/*` + `scripts/perf_baseline.*`
+
+
+## BigStep-29B 实施落地（默认兼容）
+- `OutboundBuffer` 新增轻量证据：
+  - `queue_capacity_growth_count`
+  - `peak_queue_len`
+  - `peak_pending_bytes`
+- `BytesMut` / `Cumulation` 新增 tail 证据：
+  - `capacity_growth_count` / `tail_capacity_growth_count`
+  - `peak_capacity` / `tail_peak_capacity`
+- 在 `DataPlaneOptions` / `DataPlaneConfig` 增加 `max_pending_write_bytes`，并统一走 normalize。
+- hard cap 检查统一收敛到 `OutboundBuffer::enqueue`（单点 budget check）。
+  - 默认值为 `usize::MAX`，保持现有行为兼容。
+  - 超限返回稳定错误（当前映射为 `KernelError::NoMem`）。
+- perf baseline 输出追加 alloc evidence 摘要字段，便于回归比对。

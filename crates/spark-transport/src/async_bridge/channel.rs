@@ -51,15 +51,22 @@ pub struct ChannelLimits {
     pub max_frame: usize,
     pub high_watermark: usize,
     pub low_watermark: usize,
+    pub max_pending_write_bytes: usize,
 }
 
 impl ChannelLimits {
     #[inline]
-    pub fn new(max_frame: usize, high_watermark: usize, low_watermark: usize) -> Self {
+    pub fn new(
+        max_frame: usize,
+        high_watermark: usize,
+        low_watermark: usize,
+        max_pending_write_bytes: usize,
+    ) -> Self {
         Self {
             max_frame: max_frame.max(1),
             high_watermark,
             low_watermark,
+            max_pending_write_bytes,
         }
     }
 }
@@ -83,7 +90,7 @@ where
         app: Arc<A>,
         evidence: Ev,
     ) -> Self {
-        let limits = ChannelLimits::new(max_frame, high_watermark, low_watermark);
+        let limits = ChannelLimits::new(max_frame, high_watermark, low_watermark, usize::MAX);
         let flush_budget = FlushPolicy::default().budget(limits.max_frame);
         Self::new_with_profile_and_flush_budget(
             chan_id,
@@ -129,6 +136,7 @@ where
             io,
             limits.high_watermark,
             limits.low_watermark,
+            limits.max_pending_write_bytes,
             flush_budget,
             evidence,
         );
