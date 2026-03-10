@@ -176,7 +176,7 @@ fn make_channel_with_profile(
     let io_box: Box<dyn DynChannel> = Box::new(io);
     let sink: Arc<dyn EvidenceSink> = Arc::new(NoopEvidenceSink);
     let app = Arc::new(NoopService);
-    let limits = ChannelLimits::new(64 * 1024, 1024 * 1024, 512 * 1024);
+    let limits = ChannelLimits::new(64 * 1024, 1024 * 1024, 512 * 1024, usize::MAX);
     let flush = FlushPolicy::default().budget(limits.max_frame);
     Channel::new_with_profile_and_flush_budget(1, io_box, profile, limits, flush, app, sink)
 }

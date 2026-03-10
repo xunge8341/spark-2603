@@ -1,8 +1,8 @@
-use spark_transport::async_bridge::contract::{FlushStatus, OutboundBuffer};
-use spark_transport::policy::FlushBudget;
-use spark_transport::io::{ChannelCaps, IoOps, ReadOutcome, Result, RxToken};
-use spark_transport::KernelError;
 use spark_buffer::Bytes;
+use spark_transport::async_bridge::contract::{FlushStatus, OutboundBuffer};
+use spark_transport::io::{ChannelCaps, IoOps, ReadOutcome, Result, RxToken};
+use spark_transport::policy::FlushBudget;
+use spark_transport::KernelError;
 
 /// Contract: outbound buffer must preserve byte stream ordering across partial vectored writes.
 ///
@@ -14,14 +14,15 @@ fn outbound_buffer_survives_partial_vectored_writes() {
     // Build a small buffer with two frames so flush uses vectored writes.
     let mut ob = OutboundBuffer::new(1024 * 1024, 0);
 
-    let f1 = spark_transport::async_bridge::OutboundFrame::from_bytes(Bytes::from_static(b"hello "));
+    let f1 =
+        spark_transport::async_bridge::OutboundFrame::from_bytes(Bytes::from_static(b"hello "));
     let f2 = spark_transport::async_bridge::OutboundFrame::from_bytes(Bytes::from_static(b"world"))
         .append_suffix(b"\n");
-    ob.enqueue(f1);
-    ob.enqueue(f2);
+    assert!(ob.enqueue(f1).is_ok());
+    assert!(ob.enqueue(f2).is_ok());
 
     let mut io = MockIo::new(3); // only 3 bytes per syscall to force partial writes
-    // DECISION: avoid cross-crate struct literals (FlushBudget is non-exhaustive).
+                                 // DECISION: avoid cross-crate struct literals (FlushBudget is non-exhaustive).
     let budget = FlushBudget::new(1024 * 1024, 1024).with_max_iov(16);
 
     let (st, written, syscalls, writev_calls, _wc) = ob.flush_into(&mut io, budget);
@@ -40,7 +41,10 @@ struct MockIo {
 
 impl MockIo {
     fn new(max_per_call: usize) -> Self {
-        Self { max_per_call: max_per_call.max(1), sink: Vec::new() }
+        Self {
+            max_per_call: max_per_call.max(1),
+            sink: Vec::new(),
+        }
     }
 }
 

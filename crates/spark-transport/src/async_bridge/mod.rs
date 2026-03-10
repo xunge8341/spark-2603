@@ -15,14 +15,14 @@ mod channel_state;
 pub mod dyn_channel;
 mod framers;
 mod inbound_state;
-mod outbound_frame;
 mod outbound_buffer;
+mod outbound_frame;
 mod pipeline;
 mod task;
 mod waker;
 
-pub use channel_state::tok_chan_id;
 pub use channel_driver::{chan_index, AsyncBridge, ChannelDriver, DriverConfig, DriverLimits};
+pub use channel_state::tok_chan_id;
 pub use outbound_frame::{OutboundFrame, OUTBOUND_INLINE_MAX, OUTBOUND_SEG_MAX};
 
 // Framing profiles for built-in pipelines.
@@ -57,7 +57,8 @@ pub mod dyn_boundary {
 
     pub type ChannelState = super::channel_state::ChannelState<DynEvidence, DynIo>;
     pub type Channel<A> = super::channel::Channel<A, DynEvidence, DynIo>;
-    pub type ChannelDriver<R, E, A> = super::channel_driver::ChannelDriver<R, E, A, DynEvidence, DynIo>;
+    pub type ChannelDriver<R, E, A> =
+        super::channel_driver::ChannelDriver<R, E, A, DynEvidence, DynIo>;
 }
 
 /// Contract-test exports.
@@ -74,5 +75,7 @@ pub mod contract {
     pub use super::channel::Channel;
     pub type ChannelState = super::channel_state::ChannelState<Arc<dyn EvidenceSink>>;
     pub use super::dyn_channel::DynChannel;
-    pub use super::outbound_buffer::{FlushStatus, OutboundBuffer, WritabilityChange};
+    pub use super::outbound_buffer::{
+        FlushStatus, OutboundAllocEvidence, OutboundBuffer, WritabilityChange,
+    };
 }

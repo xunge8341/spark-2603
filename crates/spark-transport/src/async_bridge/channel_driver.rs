@@ -427,6 +427,7 @@ where
 
     high_watermark: usize,
     low_watermark: usize,
+    max_pending_write_bytes: usize,
     flush_budget: FlushBudget,
 
     // Default per-channel draining timeout.
@@ -541,6 +542,7 @@ where
             wake_q: Arc::new(WakeQueue::default()),
             high_watermark: high,
             low_watermark: low,
+            max_pending_write_bytes: usize::MAX,
             flush_budget,
             drain_timeout: std::time::Duration::from_secs(5),
             schedule_state: vec![ScheduleSlotState::default(); max_channels],
@@ -575,6 +577,7 @@ where
         let mut driver =
             Self::new_with_config(reactor, executor, app, limits, metrics, evidence, config);
         driver.drain_timeout = cfg.drain_timeout;
+        driver.max_pending_write_bytes = cfg.max_pending_write_bytes;
         driver
     }
 
@@ -692,7 +695,12 @@ where
             ));
         }
 
-        let limits = ChannelLimits::new(self.max_frame, self.high_watermark, self.low_watermark);
+        let limits = ChannelLimits::new(
+            self.max_frame,
+            self.high_watermark,
+            self.low_watermark,
+            self.max_pending_write_bytes,
+        );
         let ch = match self.framing {
             FrameDecoderProfile::Line { .. } => Channel::new_with_flush_budget(
                 chan_id,

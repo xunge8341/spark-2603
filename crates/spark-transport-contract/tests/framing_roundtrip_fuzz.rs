@@ -14,9 +14,9 @@ use spark_core::context::Context as BizContext;
 use spark_core::service::Service;
 
 use spark_transport::async_bridge::channel::ChannelLimits;
+use spark_transport::async_bridge::contract::FlushStatus;
 use spark_transport::async_bridge::dyn_boundary::Channel;
 use spark_transport::async_bridge::{ByteOrder, DynChannel, FrameDecoderProfile};
-use spark_transport::async_bridge::contract::FlushStatus;
 use spark_transport::evidence::EvidenceSink;
 use spark_transport::io::{caps, ChannelCaps, IoOps, MsgBoundary, ReadOutcome};
 use spark_transport::policy::FlushPolicy;
@@ -249,10 +249,18 @@ fn drive_one_roundtrip<A>(
     let sink = Arc::new(CapturingSink::default());
     let sink_erased: Arc<dyn EvidenceSink> = sink.clone();
 
-    let limits = ChannelLimits::new(64 * 1024, 1024 * 1024, 512 * 1024);
+    let limits = ChannelLimits::new(64 * 1024, 1024 * 1024, 512 * 1024, usize::MAX);
     let flush = FlushPolicy::default().budget(limits.max_frame);
 
-    let mut ch = Channel::new_with_profile_and_flush_budget(1, io_box, profile, limits, flush, app, sink_erased);
+    let mut ch = Channel::new_with_profile_and_flush_budget(
+        1,
+        io_box,
+        profile,
+        limits,
+        flush,
+        app,
+        sink_erased,
+    );
 
     let mut read_buf = vec![0u8; read_chunk.max(1)];
     // Drive the channel until all inbound bytes have been consumed, all app work is completed,
@@ -305,7 +313,11 @@ fn drive_one_roundtrip<A>(
 
     let written = io_state.take_written();
 
-    assert_eq!(written.as_slice(), wire_out, "profile={profile:?}, read_chunk={read_chunk}, write_chunk={write_chunk}");
+    assert_eq!(
+        written.as_slice(),
+        wire_out,
+        "profile={profile:?}, read_chunk={read_chunk}, write_chunk={write_chunk}"
+    );
 }
 
 fn encode_length_field_u32_be(payload: &[u8]) -> Vec<u8> {
@@ -358,7 +370,8 @@ fn fuzz_roundtrip_random_payloads_and_segments() {
 
         // Delimiter CRLF
         {
-            let profile = FrameDecoderProfile::delimiter(64 * 1024, b"\r\n", false).expect("delimiter");
+            let profile =
+                FrameDecoderProfile::delimiter(64 * 1024, b"\r\n", false).expect("delimiter");
             let mut wire = payload.clone();
             wire.extend_from_slice(b"\r\n");
             drive_one_roundtrip(profile, echo.clone(), &wire, &wire, read_chunk, write_chunk);
@@ -366,7 +379,8 @@ fn fuzz_roundtrip_random_payloads_and_segments() {
 
         // LengthField u32 be
         {
-            let profile = FrameDecoderProfile::length_field(64 * 1024, 4, ByteOrder::Big).expect("len");
+            let profile =
+                FrameDecoderProfile::length_field(64 * 1024, 4, ByteOrder::Big).expect("len");
             let wire = encode_length_field_u32_be(&payload);
             drive_one_roundtrip(profile, echo.clone(), &wire, &wire, read_chunk, write_chunk);
         }

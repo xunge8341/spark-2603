@@ -36,3 +36,8 @@ Environment overrides:
 - `SPARK_BENCH_MAX_P99_US`
 
 The bench itself prints a single `SPARK_BENCH ...` line, which both scripts parse.
+
+
+`tests/perf_baseline.rs` also prints alloc-control evidence in the `SPARK_PERF` line:
+- `ob_q_growth`, `ob_peak_queue_len`, `ob_peak_pending_bytes`
+- `cum_tail_growth`, `cum_tail_peak_capacity`

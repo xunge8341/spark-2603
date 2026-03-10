@@ -180,7 +180,7 @@ where
 {
     let io_box: Box<dyn DynChannel> = Box::new(io);
     let sink: Arc<dyn EvidenceSink> = Arc::new(NoopEvidenceSink);
-    let limits = ChannelLimits::new(max_frame, 1024 * 1024, 512 * 1024);
+    let limits = ChannelLimits::new(max_frame, 1024 * 1024, 512 * 1024, usize::MAX);
     let flush = FlushPolicy::default().budget(limits.max_frame);
     Channel::new_with_profile_and_flush_budget(
         1,

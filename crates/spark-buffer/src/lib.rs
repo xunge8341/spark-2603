@@ -9,27 +9,27 @@
 
 extern crate alloc;
 
+mod byte_queue;
 mod bytes;
 mod bytes_mut;
-mod byte_queue;
-mod slice;
-mod endian;
-mod cursor;
 mod cumulation;
+mod cursor;
+mod endian;
 pub mod frame;
+mod slice;
 
 pub mod crc;
 pub mod hexdump;
+pub mod scan;
 pub mod serial;
 pub mod varint;
-pub mod scan;
 
-pub use bytes::Bytes;
-pub use bytes_mut::BytesMut;
 pub use byte_queue::ByteQueue;
+pub use bytes::Bytes;
+pub use bytes_mut::{BytesMut, BytesMutAllocEvidence};
 pub use slice::{SliceBuf, SliceBufMut};
 
-pub use cumulation::{Cumulation, TakeStats};
+pub use cumulation::{Cumulation, CumulationAllocEvidence, TakeStats};
 
 pub use scan::find_byte;
 
@@ -37,4 +37,3 @@ pub use cursor::{Cursor, CursorMut};
 pub use endian::*;
 
 pub use hexdump::Hex;
-

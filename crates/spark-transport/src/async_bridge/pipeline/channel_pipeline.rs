@@ -457,13 +457,14 @@ mod tests {
     }
 
     fn make_state(io: MemIo) -> ChannelState<Arc<dyn EvidenceSink>, MemIo> {
-        let limits = ChannelLimits::new(64 * 1024, 1024 * 1024, 512 * 1024);
+        let limits = ChannelLimits::new(64 * 1024, 1024 * 1024, 512 * 1024, usize::MAX);
         let flush = FlushPolicy::default().budget(limits.max_frame);
         ChannelState::new(
             1,
             io,
             limits.high_watermark,
             limits.low_watermark,
+            limits.max_pending_write_bytes,
             flush,
             Arc::new(NoopEvidenceSink),
         )

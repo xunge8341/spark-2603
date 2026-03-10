@@ -41,14 +41,15 @@ It is intentionally short and **trunk-focused**（将军赶路不打小鬼）.
 - Added tests that freeze borrowed-vs-owned boundary: stream can be borrowed; datagram must be owned.
 - Added tests that freeze pre-frame fallback behavior: when `add_first` handlers exist, borrowed fast-path is bypassed.
 
-### Gap 2 — “可控分配”还缺证据闭环与硬上限（**current focus**）
-**Now:** watermarks gate writability but do not hard-cap pending outbound bytes; queue growth can be app-driven.
-Cumulation tail is pre-capacity hinted but may still reallocate up to max-frame.
+### Gap 2 — “可控分配”证据闭环已接通，后续评估是否需要容器替换
+**Now:**
+- outbound 已有单点 hard cap（`OutboundBuffer::enqueue`）与默认兼容值（`usize::MAX`）；
+- 已暴露 `VecDeque` growth/peak 与 cumulation tail growth/peak 证据；
+- perf baseline 已输出 alloc evidence 摘要字段。
 **North Star:** hot-path allocations are either avoided or explicitly budgeted (hard cap) with observable counters.
-**Next action:** define an allocation budget model (hard caps + counters), then stage:
-- outbound hard cap option (default compatible);
-- capacity-growth counters (VecDeque/BytesMut) and baseline reporting;
-- later: bounded queues / pooling (only if evidence shows it matters).
+**Next action:**
+- 用 baseline 数据观察是否需要 ring/pooling（仅在证据支持时推进）；
+- 若推进，维持单点 budget 检查与配置单一归一化路径。
 
 ### Gap 3 — ASP.NET Core experience needs config single-source-of-truth (**current focus**)
 **Now:** Mgmt Profile v1 exists, but `ServerConfig` still mirrors mgmt fields and then re-derives the profile.

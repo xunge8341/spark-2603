@@ -1,4 +1,4 @@
-use crate::{ByteQueue, Bytes, BytesMut};
+use crate::{ByteQueue, Bytes, BytesMut, BytesMutAllocEvidence};
 
 /// Stats for extracting a frame from the cumulation.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -32,6 +32,12 @@ pub struct Cumulation {
     // - Consumption uses `BytesMut`'s bounded compaction heuristics; we do not re-introduce large
     //   memmoves on the hot path.
     tail: BytesMut,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct CumulationAllocEvidence {
+    pub tail_capacity_growth_count: u64,
+    pub tail_peak_capacity: usize,
 }
 
 impl Cumulation {
@@ -74,6 +80,18 @@ impl Cumulation {
     }
 
     #[inline]
+    pub fn alloc_evidence(&self) -> CumulationAllocEvidence {
+        let BytesMutAllocEvidence {
+            capacity_growth_count,
+            peak_capacity,
+        } = self.tail.alloc_evidence();
+        CumulationAllocEvidence {
+            tail_capacity_growth_count: capacity_growth_count,
+            tail_peak_capacity: peak_capacity,
+        }
+    }
+
+    #[inline]
     pub fn consume(&mut self, n: usize) {
         self.materialize_tail();
         self.q.advance(n);
@@ -85,7 +103,11 @@ impl Cumulation {
     ///
     /// - If the message is fully contained in the head segment, returns a zero-copy `Bytes` view.
     /// - Otherwise, coalesces only the message bytes.
-    pub fn take_message_with_stats(&mut self, consumed: usize, msg_end: usize) -> (Bytes, TakeStats) {
+    pub fn take_message_with_stats(
+        &mut self,
+        consumed: usize,
+        msg_end: usize,
+    ) -> (Bytes, TakeStats) {
         self.take_range_with_stats(consumed, 0, msg_end)
     }
 
@@ -173,9 +195,9 @@ impl Cumulation {
 mod tests {
     extern crate alloc;
 
+    use super::Cumulation;
     use alloc::vec;
     use alloc::vec::Vec;
-    use super::Cumulation;
 
     #[test]
     fn tail_accumulates_multiple_pushes_as_single_segment() {
@@ -208,5 +230,15 @@ mod tests {
         assert_eq!(m2.as_ref(), b"cdef");
         assert!(s2.coalesced);
         assert_eq!(s2.copied_bytes, 4);
+    }
+
+    #[test]
+    fn alloc_evidence_exposes_tail_growth_metrics() {
+        let mut c = Cumulation::with_capacity(1);
+        c.push_bytes(&[0u8; 1024]);
+        c.push_bytes(&[0u8; 1024]);
+        let ev = c.alloc_evidence();
+        assert!(ev.tail_capacity_growth_count > 0);
+        assert!(ev.tail_peak_capacity >= 2048);
     }
 }
