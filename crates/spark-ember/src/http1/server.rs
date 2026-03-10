@@ -48,7 +48,7 @@ impl Server {
     /// - One thread per connection (mgmt QPS is low; simplicity wins).
     /// - Minimal HTTP/1.1 (Connection: close).
     pub fn serve(self) -> std::io::Result<()> {
-        let listener = TcpListener::bind(self.config.mgmt_addr)?;
+        let listener = TcpListener::bind(self.config.mgmt.bind)?;
         self.serve_on(listener)
     }
 
@@ -61,10 +61,10 @@ impl Server {
         let inflight = Arc::clone(&self.inflight);
 
         let max_req = self.config.effective_max_request_bytes();
-        let max_head = self.config.max_head_bytes;
-        let max_headers = self.config.max_headers;
-        let max_body = self.config.max_body_bytes;
-        let max_inflight = self.config.mgmt_max_inflight;
+        let max_head = self.config.mgmt.http.max_head_bytes;
+        let max_headers = self.config.mgmt.http.max_headers;
+        let max_body = self.config.mgmt.http.max_body_bytes;
+        let max_inflight = self.config.mgmt.isolation.max_inflight;
 
         loop {
             if state.is_draining() {
@@ -77,7 +77,8 @@ impl Server {
                     let prev = inflight.fetch_add(1, Ordering::AcqRel);
                     if prev >= max_inflight {
                         inflight.fetch_sub(1, Ordering::Release);
-                        let _ = write_response(&mut stream, 503, "text/plain; charset=utf-8", b"Busy");
+                        let _ =
+                            write_response(&mut stream, 503, "text/plain; charset=utf-8", b"Busy");
                         let _ = stream.shutdown(Shutdown::Both);
                         continue;
                     }
@@ -87,7 +88,15 @@ impl Server {
                     let inflight = Arc::clone(&inflight);
                     thread::spawn(move || {
                         let _guard = InflightGuard { inflight };
-                        let _ = handle_conn(stream, routes, state, max_req, max_head, max_headers, max_body);
+                        let _ = handle_conn(
+                            stream,
+                            routes,
+                            state,
+                            max_req,
+                            max_head,
+                            max_headers,
+                            max_body,
+                        );
                     });
                 }
                 Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {
@@ -148,7 +157,12 @@ fn handle_conn(
         }
         buf.extend_from_slice(&tmp[..n]);
         if buf.len() > max_request_bytes {
-            write_response(&mut stream, 413, "text/plain; charset=utf-8", b"Request Too Large")?;
+            write_response(
+                &mut stream,
+                413,
+                "text/plain; charset=utf-8",
+                b"Request Too Large",
+            )?;
             return Ok(());
         }
 
@@ -158,11 +172,21 @@ fn handle_conn(
             Ok(DecodeOutcome::Message { consumed, message }) => {
                 let content_len = message.content_length();
                 if content_len > max_body_bytes {
-                    write_response(&mut stream, 413, "text/plain; charset=utf-8", b"Request Too Large")?;
+                    write_response(
+                        &mut stream,
+                        413,
+                        "text/plain; charset=utf-8",
+                        b"Request Too Large",
+                    )?;
                     return Ok(());
                 }
                 if consumed.saturating_add(content_len) > max_request_bytes {
-                    write_response(&mut stream, 413, "text/plain; charset=utf-8", b"Request Too Large")?;
+                    write_response(
+                        &mut stream,
+                        413,
+                        "text/plain; charset=utf-8",
+                        b"Request Too Large",
+                    )?;
                     return Ok(());
                 }
                 // Remove the consumed head bytes; keep any already-read body bytes.
@@ -170,11 +194,21 @@ fn handle_conn(
                 break message;
             }
             Err(Http1DecodeError::HeadTooLarge) => {
-                write_response(&mut stream, 413, "text/plain; charset=utf-8", b"Request Too Large")?;
+                write_response(
+                    &mut stream,
+                    413,
+                    "text/plain; charset=utf-8",
+                    b"Request Too Large",
+                )?;
                 return Ok(());
             }
             Err(_) => {
-                write_response(&mut stream, 400, "text/plain; charset=utf-8", b"Bad Request")?;
+                write_response(
+                    &mut stream,
+                    400,
+                    "text/plain; charset=utf-8",
+                    b"Bad Request",
+                )?;
                 return Ok(());
             }
         }
@@ -184,11 +218,21 @@ fn handle_conn(
 
     // `buf` contains already-read body bytes.
     if content_len > max_body_bytes {
-        write_response(&mut stream, 413, "text/plain; charset=utf-8", b"Request Too Large")?;
+        write_response(
+            &mut stream,
+            413,
+            "text/plain; charset=utf-8",
+            b"Request Too Large",
+        )?;
         return Ok(());
     }
     if max_head_bytes.saturating_add(content_len) > max_request_bytes {
-        write_response(&mut stream, 413, "text/plain; charset=utf-8", b"Request Too Large")?;
+        write_response(
+            &mut stream,
+            413,
+            "text/plain; charset=utf-8",
+            b"Request Too Large",
+        )?;
         return Ok(());
     }
 

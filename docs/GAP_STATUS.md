@@ -51,11 +51,10 @@ It is intentionally short and **trunk-focused**（将军赶路不打小鬼）.
 - 用 baseline 数据观察是否需要 ring/pooling（仅在证据支持时推进）；
 - 若推进，维持单点 budget 检查与配置单一归一化路径。
 
-### Gap 3 — ASP.NET Core experience needs config single-source-of-truth (**current focus**)
-**Now:** Mgmt Profile v1 exists, but `ServerConfig` still mirrors mgmt fields and then re-derives the profile.
+### Gap 3 — ASP.NET Core experience: effective config explainability remains
+**Now:** `ServerConfig` 已收口为 `mgmt: MgmtTransportProfileV1`，管理面不再双轨保存。
 **North Star:** Options/Profile is the only user-facing source of truth; effective config is explainable and auditable.
-**Next action:** collapse mgmt config into `MgmtTransportProfileV1` as the sole field in `ServerConfig`,
-add `describe_effective_config()` for runtime audit, and freeze default sets.
+**Next action:** add `describe_effective_config()` for runtime audit, and freeze default sets.
 
 ### Gap 4 — Multi-backend parity (largest platform gap)
 **Now:** mio is primary; IOCP has runnable posted-packet closure, but true socket overlapped submission is pending.

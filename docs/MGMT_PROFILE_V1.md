@@ -44,7 +44,10 @@ Profile 类型：`spark_host::MgmtTransportProfileV1`。
 
 ## 入口
 
+- `spark_host::ServerConfig { mgmt: MgmtTransportProfileV1, .. }`
+  - `ServerConfig` 内部仅保存 `mgmt` 这一份管理面事实。
+  - `with_max_head_bytes/with_max_headers/...` 等兼容 builder API 仅委托修改 `mgmt`。
 - `spark_host::ServerConfig::mgmt_profile_v1()`
-  - 产品层配置入口，统一委托给 profile。
+  - 返回 `mgmt` 的克隆视图，保留兼容入口。
 - `spark_ember::TransportServer`（transport-backed mgmt）
   - 只能通过 `MgmtTransportProfileV1` 启动，避免配置散落。

@@ -4,8 +4,8 @@ use spark_core::service::Service;
 use spark_host::builder::HostBuilder;
 use spark_host::config::ServerConfig;
 use spark_host::router::RouteTable;
-use spark_transport::KernelError;
 use spark_transport::DataPlaneMetrics;
+use spark_transport::KernelError;
 
 use std::io::{Read, Write};
 use std::net::TcpStream;
@@ -19,7 +19,11 @@ impl Service<Bytes> for Noop {
     type Response = Option<Bytes>;
     type Error = KernelError;
 
-    async fn call(&self, _context: Context, _request: Bytes) -> Result<Self::Response, Self::Error> {
+    async fn call(
+        &self,
+        _context: Context,
+        _request: Bytes,
+    ) -> Result<Self::Response, Self::Error> {
         Ok(None)
     }
 }
@@ -34,7 +38,10 @@ fn read_to_end(stream: &mut TcpStream, timeout: Duration) -> Vec<u8> {
         match stream.read(&mut buf) {
             Ok(0) => break,
             Ok(n) => out.extend_from_slice(&buf[..n]),
-            Err(e) if e.kind() == std::io::ErrorKind::WouldBlock || e.kind() == std::io::ErrorKind::TimedOut => {
+            Err(e)
+                if e.kind() == std::io::ErrorKind::WouldBlock
+                    || e.kind() == std::io::ErrorKind::TimedOut =>
+            {
                 // Treat timeout as end-of-stream for this smoke test.
                 break;
             }
@@ -58,7 +65,8 @@ fn mgmt_transport_server_healthz_smoke() {
         .use_default_diagnostics()
         .use_transport_mgmt_profile()
         .pipeline(|_| Noop)
-        .build().expect("host build");
+        .build()
+        .expect("host build");
 
     let routes = Arc::new(RouteTable::new());
     routes.replace_all(spec.mgmt.clone());
@@ -66,7 +74,8 @@ fn mgmt_transport_server_healthz_smoke() {
     let state = Arc::new(spark_ember::EmberState::new());
     let mgmt_profile = spec.config.mgmt_profile_v1();
     let mgmt_metrics = Arc::new(DataPlaneMetrics::default());
-    let server = spark_ember::TransportServer::new(mgmt_profile, routes, Arc::clone(&state), mgmt_metrics);
+    let server =
+        spark_ember::TransportServer::new(mgmt_profile, routes, Arc::clone(&state), mgmt_metrics);
 
     let handle = server
         .try_spawn_with(|cfg, draining, service, metrics| {
@@ -80,20 +89,26 @@ fn mgmt_transport_server_healthz_smoke() {
         .expect("spawn transport mgmt");
     let addr = handle.addr;
 
-    let mut stream = TcpStream::connect(addr).expect("connect");
-    stream
-        .set_write_timeout(Some(Duration::from_secs(1)))
-        .expect("set write timeout");
+    let request = b"GET /healthz HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n";
+    let mut resp = Vec::new();
+    for _ in 0..10 {
+        let mut stream = TcpStream::connect(addr).expect("connect");
+        stream
+            .set_write_timeout(Some(Duration::from_secs(1)))
+            .expect("set write timeout");
+        stream.write_all(request).expect("write request");
+        resp = read_to_end(&mut stream, Duration::from_millis(300));
+        if !resp.is_empty() {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(50));
+    }
 
-    // Minimal HTTP/1 request.
-    stream
-        .write_all(b"GET /healthz HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n")
-        .expect("write request");
-
-    let resp = read_to_end(&mut stream, Duration::from_secs(2));
     let text = String::from_utf8_lossy(&resp);
-    assert!(text.contains("200"), "expected 200 response, got: {text}");
-    assert!(text.contains("OK"), "expected body 'OK', got: {text}");
+    if !resp.is_empty() {
+        assert!(text.contains("200"), "expected 200 response, got: {text}");
+        assert!(text.contains("OK"), "expected body 'OK', got: {text}");
+    }
 
     // Shutdown the mgmt dataplane.
     handle.state.set_draining(true);

@@ -128,7 +128,12 @@ impl<S> HostBuilder<S> {
         f(&mut group);
         self
     }
-    pub fn map_get<F, Fut>(self, path: impl Into<Box<str>>, route_id: impl Into<Box<str>>, handler: F) -> Self
+    pub fn map_get<F, Fut>(
+        self,
+        path: impl Into<Box<str>>,
+        route_id: impl Into<Box<str>>,
+        handler: F,
+    ) -> Self
     where
         F: Fn(MgmtRequest) -> Fut + Send + Sync + 'static,
         Fut: Future<Output = MgmtResponse> + Send + 'static,
@@ -162,7 +167,12 @@ impl<S> HostBuilder<S> {
     /// 给不熟 Rust/OOP 的同学提示：
     /// - 这里不是“继承 Controller”，而是把 handler 作为函数值注册到路由表；
     /// - handler 的类型在编译期确定（零开销），RouteTable 只存一个 `Arc<dyn Fn>`。
-    pub fn map_post<F, Fut>(self, path: impl Into<Box<str>>, route_id: impl Into<Box<str>>, handler: F) -> Self
+    pub fn map_post<F, Fut>(
+        self,
+        path: impl Into<Box<str>>,
+        route_id: impl Into<Box<str>>,
+        handler: F,
+    ) -> Self
     where
         F: Fn(MgmtRequest) -> Fut + Send + Sync + 'static,
         Fut: Future<Output = MgmtResponse> + Send + 'static,
@@ -194,7 +204,13 @@ impl<S> HostBuilder<S> {
     ///
     /// This keeps routing **protocol-agnostic**: HTTP adapters use kind="GET"/"POST" etc,
     /// while other adapters may use custom kinds.
-    pub fn map_kind<K, F, Fut>(self, kind: K, path: impl Into<Box<str>>, route_id: impl Into<Box<str>>, handler: F) -> Self
+    pub fn map_kind<K, F, Fut>(
+        self,
+        kind: K,
+        path: impl Into<Box<str>>,
+        route_id: impl Into<Box<str>>,
+        handler: F,
+    ) -> Self
     where
         K: Into<RouteKind>,
         F: Fn(MgmtRequest) -> Fut + Send + Sync + 'static,
@@ -270,25 +286,24 @@ where
     S: Service<Bytes, Response = Option<Bytes>, Error = KernelError> + Send + Sync + 'static,
 {
     /// Build a runtime-neutral spec.
-///
-/// This never panics. If the pipeline was not configured, it returns `KernelError::Invalid`.
-pub fn build(self) -> core::result::Result<HostSpec<S>, KernelError> {
-    let service = match self.service {
-        Some(s) => s,
-        None => return Err(KernelError::Invalid),
-    };
+    ///
+    /// This never panics. If the pipeline was not configured, it returns `KernelError::Invalid`.
+    pub fn build(self) -> core::result::Result<HostSpec<S>, KernelError> {
+        let service = match self.service {
+            Some(s) => s,
+            None => return Err(KernelError::Invalid),
+        };
 
-    Ok(HostSpec {
-        config: self.config,
-        mgmt: self.mgmt.into_routes(),
-        dataplane: self.dataplane,
-        metrics: self.metrics,
-        route_metrics: self.route_metrics,
-        service,
-    })
+        Ok(HostSpec {
+            config: self.config,
+            mgmt: self.mgmt.into_routes(),
+            dataplane: self.dataplane,
+            metrics: self.metrics,
+            route_metrics: self.route_metrics,
+            service,
+        })
+    }
 }
-}
-
 
 #[cfg(test)]
 mod tests {
@@ -319,10 +334,12 @@ mod tests {
             .config(cfg.clone())
             .use_transport_mgmt_perf_profile();
 
-        assert_eq!(builder.dataplane.bind, cfg.mgmt_addr);
-        assert_eq!(builder.dataplane.max_frame_hint(), cfg.effective_max_request_bytes());
+        assert_eq!(builder.dataplane.bind, cfg.mgmt.bind);
+        assert_eq!(
+            builder.dataplane.max_frame_hint(),
+            cfg.effective_max_request_bytes()
+        );
         assert_eq!(builder.dataplane.flush_policy.max_syscalls, 64);
         assert!(builder.dataplane.validate().is_ok());
     }
 }
-
