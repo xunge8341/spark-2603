@@ -35,6 +35,18 @@
 - contract suite 必须全绿（尤其 driver ordering / close semantics / framing roundtrip）
 - 新增一个最小 contract：decode error/early return 也必须 release token exactly once（结构化 drop）
 
+### 阶段 A contract（冻结） vs implementation strategy（可演进）
+
+**Contract（必须稳定）：**
+- token release must be **exactly once**，包含：normal success / decode error / early return / handler error。
+- borrowed fast-path 只允许 stream（`MsgBoundary::None`）；datagram（`MsgBoundary::Complete`）必须走 owned。
+- 有 pre-frame handler（`add_first`）时，不能走 borrowed fast-path，必须 fallback 到 owned 路径，行为与旧路径一致。
+- framing roundtrip 与既有 decode/close/order contract 不回归。
+
+**Implementation strategy（当前实现，可在不破坏 contract 前提下调整）：**
+- stream token 路径当前仍会在 decoder/cumulation 处发生 1 次 copy；Phase A 不承诺 0-copy。
+- pre-frame fallback 当前通过 `Bytes::copy_from_slice` 实现 owned 兜底，后续可替换为等价 owned 形态。
+
 ### 阶段 B：引入 “owned segment append” 关闭零拷贝闭环（从 1 次降到 0 次）
 **终态边界：**
 - 扩展 cumulation：新增 `Cumulation::push_segment(Bytes)`，用于把 **已拥有的 immutable segment** 直接入队（零拷贝）

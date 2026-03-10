@@ -36,6 +36,11 @@ It is intentionally short and **trunk-focused**（将军赶路不打小鬼）.
 1) **Phase A 收口**：lease token -> borrowed slice fast-path + RAII release，终态为 1 次 copy（cumulation tail）；
 2) 之后再评估是否进入 Phase B（owned-segment append）以冲击 0-copy。
 
+**Latest contract hardening (BigStep-29A.2):**
+- Added regression tests for Phase A boundaries: token release exactly-once across success/decode-error/early-return/handler-error.
+- Added tests that freeze borrowed-vs-owned boundary: stream can be borrowed; datagram must be owned.
+- Added tests that freeze pre-frame fallback behavior: when `add_first` handlers exist, borrowed fast-path is bypassed.
+
 ### Gap 2 — “可控分配”还缺证据闭环与硬上限（**current focus**）
 **Now:** watermarks gate writability but do not hard-cap pending outbound bytes; queue growth can be app-driven.
 Cumulation tail is pre-capacity hinted but may still reallocate up to max-frame.
