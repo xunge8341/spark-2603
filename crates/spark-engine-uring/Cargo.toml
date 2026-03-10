@@ -1,0 +1,8 @@
+[package]
+name = "spark-engine-uring"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+spark-transport = { path = "../spark-transport" }

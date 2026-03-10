@@ -1,0 +1,30 @@
+# cargo-deny configuration (optional CI gate)
+#
+# Usage:
+#   cargo install cargo-deny --locked
+#   cargo deny check
+
+[advisories]
+version = 2
+# Deny yanked crates in the dependency graph.
+yanked = "deny"
+# Deny vulnerabilities by default.
+ignore = []
+
+[licenses]
+version = 2
+# Keep this list minimal and explicit.
+allow = ["Apache-2.0", "MIT", "Unicode-DFS-2016"]
+confidence-threshold = 0.8
+
+[bans]
+version = 2
+# Allow multiple versions during bring-up; tighten later if desired.
+multiple-versions = "warn"
+# Avoid wildcard deps.
+wildcards = "deny"
+
+[sources]
+version = 2
+unknown-registry = "deny"
+unknown-git = "deny"

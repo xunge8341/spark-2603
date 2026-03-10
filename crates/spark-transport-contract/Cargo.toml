@@ -1,0 +1,17 @@
+[package]
+name = "spark-transport-contract"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+# Contract hooks live in spark-transport.
+spark-transport = { path = "../spark-transport", features = ["contract"] }
+
+spark-core = { path = "../spark-core" }
+spark-buffer = { path = "../spark-buffer" }
+
+# Backend types used by contract tests (leaf crate).
+spark-transport-mio = { path = "../spark-transport-mio" }
+
+mio = { version = "1.1.1", default-features = false, features = ["net", "os-poll"] }

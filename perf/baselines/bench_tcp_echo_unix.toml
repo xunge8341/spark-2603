@@ -1,0 +1,7 @@
+profile = "unix"
+
+# Coarse latency/throughput baselines for the mio TCP echo micro-bench.
+# Tune per CI host class.
+
+min_rps = 1000
+max_p99_us = 50000

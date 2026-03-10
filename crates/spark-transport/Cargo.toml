@@ -1,0 +1,32 @@
+[package]
+name = "spark-transport"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+spark-core = { path = "../spark-core" }
+spark-buffer = { path = "../spark-buffer" }
+spark-codec = { path = "../spark-codec" }
+spark-codec-http = { path = "../spark-codec-http", optional = true }
+spark-uci = { path = "../spark-uci" }
+
+[features]
+default = []
+# Contract-test hooks (used by `spark-transport-contract`).
+contract = []
+
+# Completion-style backend foundation (IOCP / io_uring).
+#
+# DECISION (Multi-backend roadmap): keep completion APIs behind an explicit feature.
+# - Readiness backends (mio/epoll/kqueue) remain the default bring-up path.
+# - Completion backends require additional API surface (op tokens, completion events) that we want to
+#   stabilize intentionally (no accidental public commitments).
+completion = []
+
+# Diagnostics helpers (intentionally NOT part of the hot path).
+# This feature is OFF by default; enable explicitly when you need downcast-based probing.
+diagnostics = []
+
+# Optional: HTTP/1 management-plane framing profile.
+mgmt-http1 = ["dep:spark-codec-http"]

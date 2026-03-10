@@ -1,0 +1,16 @@
+[package]
+name = "spark-dist-iocp"
+version = "0.1.0"
+edition = "2021"
+license = "Proprietary"
+
+[dependencies]
+spark-core = { path = "../spark-core" }
+spark-buffer = { path = "../spark-buffer" }
+spark-transport = { path = "../spark-transport" }
+spark-transport-iocp = { path = "../spark-transport-iocp" }
+spark-host = { path = "../spark-host" }
+spark-ember = { path = "../spark-ember", features = ["transport-mgmt"] }
+
+[dev-dependencies]
+spark-uci = { path = "../spark-uci" }

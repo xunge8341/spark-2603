@@ -1,0 +1,11 @@
+[package]
+name = "spark-host"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+spark-core = { path = "../spark-core" }
+spark-buffer = { path = "../spark-buffer" }
+spark-transport = { path = "../spark-transport" }
+spark-metrics-prometheus = { path = "../spark-metrics-prometheus" }

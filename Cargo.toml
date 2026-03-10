@@ -1,0 +1,54 @@
+[workspace]
+resolver = "2"
+
+# 说明：
+# - `members` 包含所有 crate（含后端/契约测试）。
+# - `default-members` 仅包含“主干五件套”，便于不熟 Rust 的用户快速上手：
+#   buffer / codec / transport / host / ember。
+# - 后端（mio/uring）与 contract suite 仍可通过 `--workspace` 或 `-p` 显式构建。
+members = [
+  "crates/spark-uci",
+  "crates/spark-core",
+  "crates/spark-codec",
+  "crates/spark-codec-text",
+  "crates/spark-codec-http",
+  "crates/spark-codec-sip",
+  "crates/spark-buffer",
+
+  # Transport semantics (runtime-neutral) and backend integrations.
+  "crates/spark-transport",
+  "crates/spark-transport-iocp",
+  "crates/spark-transport-mio",
+  "crates/spark-transport-contract",
+
+  # Host assembly (runtime-neutral) + default server distribution.
+  "crates/spark-host",
+  "crates/spark-ember",
+
+  # Leaf-only exporters / delivery helpers.
+  "crates/spark-metrics-prometheus",
+  "crates/spark-dist-mio",
+  "crates/spark-dist-iocp",
+]
+
+# Windows 验证优先：`io_uring` 相关 bring-up/实验代码不参与 workspace 默认构建。
+# 如果你在 Linux 上想继续推进 `io_uring` 后端，请把 `crates/spark-engine-uring`
+# 重新加入 members（或迁移到单独 repo/子模块）。
+exclude = [
+  "crates/spark-engine-uring",
+]
+
+default-members = [
+  "crates/spark-buffer",
+  "crates/spark-codec",
+  "crates/spark-codec-text",
+  "crates/spark-codec-http",
+  "crates/spark-codec-sip",
+  "crates/spark-transport",
+  "crates/spark-host",
+  "crates/spark-ember",
+]
+
+[workspace.package]
+edition = "2021"
+license = "Proprietary"

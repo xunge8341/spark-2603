@@ -1,0 +1,28 @@
+[package]
+name = "spark-transport-iocp"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+spark-uci = { path = "../spark-uci" }
+spark-transport = { path = "../spark-transport" }
+spark-buffer = { path = "../spark-buffer" }
+spark-core = { path = "../spark-core" }
+
+[features]
+default = []
+
+# Enable the native completion-style IOCP prototype.
+#
+# DECISION (BigStep-17): keep this opt-in until the completion driver can satisfy the full P0 contract suite.
+native-completion = ["spark-transport/completion"]
+
+[target.'cfg(windows)'.dependencies]
+spark-transport-mio = { path = "../spark-transport-mio" }
+
+# Windows API surface used by the completion prototype.
+windows-sys = { version = "0.61.2", features = [
+  "Win32_Foundation",
+  "Win32_System_IO",
+  "Win32_System_Threading",
+] }

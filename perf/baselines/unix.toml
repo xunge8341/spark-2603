@@ -1,0 +1,4 @@
+[perf_gate]
+max_syscalls_per_kib = 1.0
+min_writev_share = 0.5
+profile = "unix"

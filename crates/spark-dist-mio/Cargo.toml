@@ -1,0 +1,17 @@
+[package]
+name = "spark-dist-mio"
+version = "0.1.0"
+edition = "2021"
+license = "Proprietary"
+
+[dependencies]
+spark-core = { path = "../spark-core" }
+spark-buffer = { path = "../spark-buffer" }
+spark-transport = { path = "../spark-transport" }
+spark-transport-mio = { path = "../spark-transport-mio" }
+spark-host = { path = "../spark-host" }
+spark-ember = { path = "../spark-ember", features = ["transport-mgmt"] }
+
+[dev-dependencies]
+# No extra deps beyond internal crates.
+spark-uci = { path = "../spark-uci" }

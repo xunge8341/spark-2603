@@ -1,0 +1,24 @@
+[package]
+name = "spark-transport-mio"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+# Runtime-neutral semantics.
+spark-transport = { path = "../spark-transport" }
+
+# Core traits & types.
+spark-core = { path = "../spark-core" }
+spark-buffer = { path = "../spark-buffer" }
+
+# Leaf dependency (backend).
+mio = { version = "1.1.1", default-features = false, features = ["net", "os-poll"] }
+
+# Optional logging adaptor (leaf-only).
+log = { version = "0.4.29", optional = true }
+
+[features]
+default = []
+# Enable evidence -> log adaptor (kept in leaf crate to avoid workspace feature unification noise).
+evidence-log = ["dep:log"]

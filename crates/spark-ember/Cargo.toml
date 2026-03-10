@@ -1,0 +1,40 @@
+[package]
+name = "spark-ember"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+spark-host = { path = "../spark-host" }
+spark-core = { path = "../spark-core" }
+spark-codec = { path = "../spark-codec" }
+spark-codec-http = { path = "../spark-codec-http" }
+spark-buffer = { path = "../spark-buffer", optional = true }
+
+# Optional: management-plane dogfooding on Spark transport (backend is injected by the distribution crate).
+spark-transport = { path = "../spark-transport", optional = true, features = ["mgmt-http1"] }
+
+# Optional backends for examples only (kept `optional` to preserve `spark-ember` backend-neutral core).
+spark-transport-mio = { path = "../spark-transport-mio", optional = true }
+spark-transport-iocp = { path = "../spark-transport-iocp", optional = true }
+
+# 说明：
+# - `spark-ember` 类似 ASP.NET Core 的 Kestrel：作为“默认 server 发行物”，
+#   但 *不绑死任何运行时/IO 后端*。
+# - 因此这里不引入 tokio/mio/bytes 等第三方依赖。
+# - 运行时/后端由上层应用（或可选集成 crate）注入。
+
+[features]
+default = []
+
+# Enable an HTTP/1 management server implemented on top of `spark-transport` (mio backend).
+transport-mgmt = ["dep:spark-transport", "dep:spark-buffer"]
+
+# Example-only backend toggles (do not affect library users).
+backend-mio = ["dep:spark-transport-mio"]
+backend-iocp = ["dep:spark-transport-iocp"]
+
+[[example]]
+name = "spark_switch"
+path = "examples/spark_switch.rs"
+required-features = ["transport-mgmt"]

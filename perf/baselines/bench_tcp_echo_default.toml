@@ -1,0 +1,10 @@
+profile = "default"
+
+# Coarse latency/throughput baselines for the mio TCP echo micro-bench.
+# These are intentionally conservative and should be tuned per environment.
+
+# Minimum requests/second observed over the benchmark window.
+min_rps = 1000
+
+# Maximum p99 latency in microseconds.
+max_p99_us = 50000
