@@ -5,26 +5,23 @@ use spark_buffer::Bytes;
 
 use crate::evidence::EvidenceSink;
 use crate::io::MsgBoundary;
+use crate::policy::{FlushBudget, FlushPolicy};
 use crate::reactor::Interest;
 use crate::{KernelError, Result};
-use crate::policy::{FlushBudget, FlushPolicy};
 use spark_core::service::Service;
 
 use super::channel_state::{ChannelState, ReadChunk};
 use super::dyn_channel::DynChannel;
-use super::OutboundFrame;
 use super::outbound_buffer::{FlushStatus, WritabilityChange};
-use super::pipeline::{
-    ChannelPipeline,
-    ChannelPipelineBuilder,
-    DelimiterOptions,
-    Http1Options,
-    LengthFieldOptions,
-    LineOptions,
-    Varint32Options,
-};
 use super::pipeline::FrameDecoderProfile;
+use super::pipeline::{
+    ChannelPipeline, ChannelPipelineBuilder, DelimiterOptions, Http1Options, LengthFieldOptions,
+    LineOptions, Varint32Options,
+};
 use super::task::AppFuture;
+use super::OutboundFrame;
+
+pub type OnReadableStats = (usize, usize, usize, u64, u64, u64, u64, u64, u64, u64);
 
 /// Netty/DotNetty 风格的“语义 Channel”（每连接一个）。
 ///
@@ -127,40 +124,56 @@ where
         app: Arc<A>,
         evidence: Ev,
     ) -> Self {
-        let mut state =
-            ChannelState::new(
-                chan_id,
-                io,
-                limits.high_watermark,
-                limits.low_watermark,
-                flush_budget,
-                evidence,
-            );
+        let mut state = ChannelState::new(
+            chan_id,
+            io,
+            limits.high_watermark,
+            limits.low_watermark,
+            flush_budget,
+            evidence,
+        );
 
         let mut b = ChannelPipelineBuilder::<A, Ev, Io>::new(app);
         b = match profile {
             FrameDecoderProfile::Line { max_frame } => b.line(LineOptions::new(max_frame)),
-            FrameDecoderProfile::Delimiter { max_frame, delimiter, include_delimiter } => {
-                b.delimiter(DelimiterOptions::new(max_frame, delimiter, include_delimiter))
-            }
-            FrameDecoderProfile::LengthField { max_frame, field_len, order } => {
+            FrameDecoderProfile::Delimiter {
+                max_frame,
+                delimiter,
+                include_delimiter,
+            } => b.delimiter(DelimiterOptions::new(
+                max_frame,
+                delimiter,
+                include_delimiter,
+            )),
+            FrameDecoderProfile::LengthField {
+                max_frame,
+                field_len,
+                order,
+            } => {
                 if let Some(opts) = LengthFieldOptions::new(max_frame, field_len as usize, order) {
                     b.length_field(opts)
                 } else {
                     b.framing(profile)
                 }
             }
-            FrameDecoderProfile::Varint32 { max_frame } => b.varint32(Varint32Options::new(max_frame)),
-            FrameDecoderProfile::Http1 { max_request_bytes, max_head_bytes, max_headers } => {
-                b.http1(Http1Options::with_limits(max_request_bytes, max_head_bytes, max_headers))
-            },
+            FrameDecoderProfile::Varint32 { max_frame } => {
+                b.varint32(Varint32Options::new(max_frame))
+            }
+            FrameDecoderProfile::Http1 {
+                max_request_bytes,
+                max_head_bytes,
+                max_headers,
+            } => b.http1(Http1Options::with_limits(
+                max_request_bytes,
+                max_head_bytes,
+                max_headers,
+            )),
         };
         let mut pipeline = b.build();
 
         let _ = pipeline.fire_channel_active(&mut state);
         Self { state, pipeline }
     }
-
 
     #[inline]
     #[allow(dead_code)]
@@ -220,49 +233,50 @@ where
 
     /// 处理 readable 事件：read loop + pipeline（decoder）处理。
     ///
-    /// 返回：(read_bytes, decoded_msgs, decode_errors)
+    /// 返回：(read_bytes, decoded_msgs, decode_errors, too_large, coalesce_count, copied_bytes, cumulation_copy_bytes, lease_tokens, lease_borrowed_bytes, materialize_bytes)
     pub fn on_readable(
         &mut self,
         read_buf: &mut [u8],
         max_reads_per_call: usize,
-    ) -> Result<(usize, usize, usize, u64, u64, u64)> {
+    ) -> Result<OnReadableStats> {
         let mut read_bytes = 0usize;
 
         let mut reads = 0usize;
         while reads < max_reads_per_call {
             reads += 1;
             let (state, pipeline) = (&mut self.state, &mut self.pipeline);
-            let (boundary, had_data) = match state.with_read_chunk(read_buf, |state, boundary, chunk| {
-                if chunk.is_empty() {
-                    return Ok((boundary, false));
-                }
-                read_bytes += chunk.len();
-
-                match chunk {
-                    ReadChunk::Borrowed(b) => {
-                        debug_assert_eq!(boundary, MsgBoundary::None);
-                        // Fast-path for stream reads: avoid intermediate Bytes allocation/copy.
-                        pipeline.fire_channel_read_raw_stream_slice(state, b)?;
+            let (boundary, had_data) =
+                match state.with_read_chunk(read_buf, |state, boundary, chunk| {
+                    if chunk.is_empty() {
+                        return Ok((boundary, false));
                     }
-                    ReadChunk::Owned(bytes) => {
-                        // Owned bytes path: materialized token fallback, or datagram payload.
-                        pipeline.fire_channel_read_raw(state, boundary, bytes)?;
-                    }
-                }
+                    read_bytes += chunk.len();
 
-                Ok((boundary, true))
-            }) {
-                Ok(v) => v,
-                Err(KernelError::WouldBlock) => break,
-                Err(KernelError::Interrupted) => continue,
-                Err(KernelError::Eof) => {
-                    // Peer half-close: stop READ interest but allow pending writes to flush.
-                    self.state.mark_peer_eof();
-                    break;
-                }
-                Err(KernelError::Closed) => return Err(KernelError::Closed),
-                Err(e) => return Err(e),
-            };
+                    match chunk {
+                        ReadChunk::Borrowed(b) => {
+                            debug_assert_eq!(boundary, MsgBoundary::None);
+                            // Fast-path for stream reads: avoid intermediate Bytes allocation/copy.
+                            pipeline.fire_channel_read_raw_stream_slice(state, b)?;
+                        }
+                        ReadChunk::Owned(bytes) => {
+                            // Owned bytes path: materialized token fallback, or datagram payload.
+                            pipeline.fire_channel_read_raw(state, boundary, bytes)?;
+                        }
+                    }
+
+                    Ok((boundary, true))
+                }) {
+                    Ok(v) => v,
+                    Err(KernelError::WouldBlock) => break,
+                    Err(KernelError::Interrupted) => continue,
+                    Err(KernelError::Eof) => {
+                        // Peer half-close: stop READ interest but allow pending writes to flush.
+                        self.state.mark_peer_eof();
+                        break;
+                    }
+                    Err(KernelError::Closed) => return Err(KernelError::Closed),
+                    Err(e) => return Err(e),
+                };
 
             if !had_data {
                 break;
@@ -276,8 +290,29 @@ where
 
         self.pipeline.fire_channel_read_complete(&mut self.state)?;
 
-        let (decoded, decode_errs, too_large, coalesce_count, copied_bytes) = self.state.take_decode_stats();
-        Ok((read_bytes, decoded, decode_errs, too_large, coalesce_count, copied_bytes))
+        let (
+            decoded,
+            decode_errs,
+            too_large,
+            coalesce_count,
+            copied_bytes,
+            cumulation_copy_bytes,
+            lease_tokens,
+            lease_borrowed_bytes,
+            materialize_bytes,
+        ) = self.state.take_decode_stats();
+        Ok((
+            read_bytes,
+            decoded,
+            decode_errs,
+            too_large,
+            coalesce_count,
+            copied_bytes,
+            cumulation_copy_bytes,
+            lease_tokens,
+            lease_borrowed_bytes,
+            materialize_bytes,
+        ))
     }
 
     /// 尝试 flush outbound buffer。

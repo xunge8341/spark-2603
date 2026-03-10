@@ -24,6 +24,7 @@ pub(super) struct Http1DecodeBatchStats {
     pub produced: usize,
     pub coalesce_count: usize,
     pub copied_bytes: usize,
+    pub cumulation_copy_bytes: usize,
 }
 
 #[derive(Debug, Clone)]
@@ -92,7 +93,10 @@ impl Http1InboundState {
             });
         }
 
-        let mut stats = Http1DecodeBatchStats::default();
+        let mut stats = Http1DecodeBatchStats {
+            cumulation_copy_bytes: bytes.len(),
+            ..Http1DecodeBatchStats::default()
+        };
 
         // Bound per-call work to avoid starving other connections.
         const MAX_DECODE_PER_CALL: usize = 8;
@@ -176,7 +180,11 @@ impl Http1InboundState {
     }
 }
 
-fn head_prefix_from<'a>(cumulation: &'a Cumulation, scratch: &'a mut BytesMut, want: usize) -> &'a [u8] {
+fn head_prefix_from<'a>(
+    cumulation: &'a Cumulation,
+    scratch: &'a mut BytesMut,
+    want: usize,
+) -> &'a [u8] {
     if want == 0 {
         return &[];
     }

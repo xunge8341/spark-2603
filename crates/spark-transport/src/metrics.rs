@@ -31,6 +31,10 @@ pub struct DataPlaneMetrics {
     // Cumulation stats (copy/coalesce on stream read path).
     pub inbound_coalesce_total: AtomicU64,
     pub inbound_copied_bytes_total: AtomicU64,
+    pub rx_lease_tokens_total: AtomicU64,
+    pub rx_lease_borrowed_bytes_total: AtomicU64,
+    pub rx_materialize_bytes_total: AtomicU64,
+    pub rx_cumulation_copy_bytes_total: AtomicU64,
 
     // Driver scheduling kernel internals (stable counters, low overhead).
     pub driver_schedule_interest_sync_total: AtomicU64,
@@ -43,7 +47,6 @@ pub struct DataPlaneMetrics {
     // Reactor register de-dup internals.
     pub driver_interest_register_total: AtomicU64,
     pub driver_interest_register_skipped_total: AtomicU64,
-
 
     // Driver task ownership internals.
     pub driver_task_submit_total: AtomicU64,
@@ -86,6 +89,10 @@ pub struct DataPlaneMetricsSnapshot {
 
     pub inbound_coalesce_total: u64,
     pub inbound_copied_bytes_total: u64,
+    pub rx_lease_tokens_total: u64,
+    pub rx_lease_borrowed_bytes_total: u64,
+    pub rx_materialize_bytes_total: u64,
+    pub rx_cumulation_copy_bytes_total: u64,
 
     pub driver_schedule_interest_sync_total: u64,
     pub driver_schedule_reclaim_total: u64,
@@ -139,7 +146,9 @@ impl DataPlaneMetrics {
         DataPlaneMetricsSnapshot {
             accepted_total: self.accepted_total.load(Ordering::Relaxed),
             accept_errors_total: self.accept_errors_total.load(Ordering::Relaxed),
-            accept_errors_transient_total: self.accept_errors_transient_total.load(Ordering::Relaxed),
+            accept_errors_transient_total: self
+                .accept_errors_transient_total
+                .load(Ordering::Relaxed),
             accept_errors_fatal_total: self.accept_errors_fatal_total.load(Ordering::Relaxed),
             accept_rejected_total: self.accept_rejected_total.load(Ordering::Relaxed),
             closed_total: self.closed_total.load(Ordering::Relaxed),
@@ -155,28 +164,64 @@ impl DataPlaneMetrics {
             draining_timeout_total: self.draining_timeout_total.load(Ordering::Relaxed),
             decoded_msgs_total: self.decoded_msgs_total.load(Ordering::Relaxed),
             decode_errors_total: self.decode_errors_total.load(Ordering::Relaxed),
-            inbound_frame_too_large_total: self.inbound_frame_too_large_total.load(Ordering::Relaxed),
+            inbound_frame_too_large_total: self
+                .inbound_frame_too_large_total
+                .load(Ordering::Relaxed),
             flush_limited_total: self.flush_limited_total.load(Ordering::Relaxed),
             inbound_coalesce_total: self.inbound_coalesce_total.load(Ordering::Relaxed),
             inbound_copied_bytes_total: self.inbound_copied_bytes_total.load(Ordering::Relaxed),
+            rx_lease_tokens_total: self.rx_lease_tokens_total.load(Ordering::Relaxed),
+            rx_lease_borrowed_bytes_total: self
+                .rx_lease_borrowed_bytes_total
+                .load(Ordering::Relaxed),
+            rx_materialize_bytes_total: self.rx_materialize_bytes_total.load(Ordering::Relaxed),
+            rx_cumulation_copy_bytes_total: self
+                .rx_cumulation_copy_bytes_total
+                .load(Ordering::Relaxed),
 
-            driver_schedule_interest_sync_total: self.driver_schedule_interest_sync_total.load(Ordering::Relaxed),
-            driver_schedule_reclaim_total: self.driver_schedule_reclaim_total.load(Ordering::Relaxed),
-            driver_schedule_draining_flush_total: self.driver_schedule_draining_flush_total.load(Ordering::Relaxed),
-            driver_schedule_write_kick_total: self.driver_schedule_write_kick_total.load(Ordering::Relaxed),
-            driver_schedule_flush_followup_total: self.driver_schedule_flush_followup_total.load(Ordering::Relaxed),
-            driver_schedule_read_kick_total: self.driver_schedule_read_kick_total.load(Ordering::Relaxed),
-            driver_schedule_stale_skipped_total: self.driver_schedule_stale_skipped_total.load(Ordering::Relaxed),
-            driver_interest_register_total: self.driver_interest_register_total.load(Ordering::Relaxed),
-            driver_interest_register_skipped_total: self.driver_interest_register_skipped_total.load(Ordering::Relaxed),
+            driver_schedule_interest_sync_total: self
+                .driver_schedule_interest_sync_total
+                .load(Ordering::Relaxed),
+            driver_schedule_reclaim_total: self
+                .driver_schedule_reclaim_total
+                .load(Ordering::Relaxed),
+            driver_schedule_draining_flush_total: self
+                .driver_schedule_draining_flush_total
+                .load(Ordering::Relaxed),
+            driver_schedule_write_kick_total: self
+                .driver_schedule_write_kick_total
+                .load(Ordering::Relaxed),
+            driver_schedule_flush_followup_total: self
+                .driver_schedule_flush_followup_total
+                .load(Ordering::Relaxed),
+            driver_schedule_read_kick_total: self
+                .driver_schedule_read_kick_total
+                .load(Ordering::Relaxed),
+            driver_schedule_stale_skipped_total: self
+                .driver_schedule_stale_skipped_total
+                .load(Ordering::Relaxed),
+            driver_interest_register_total: self
+                .driver_interest_register_total
+                .load(Ordering::Relaxed),
+            driver_interest_register_skipped_total: self
+                .driver_interest_register_skipped_total
+                .load(Ordering::Relaxed),
 
             driver_task_submit_total: self.driver_task_submit_total.load(Ordering::Relaxed),
-            driver_task_submit_failed_total: self.driver_task_submit_failed_total.load(Ordering::Relaxed),
-            driver_task_submit_inflight_suppressed_total: self.driver_task_submit_inflight_suppressed_total.load(Ordering::Relaxed),
-            driver_task_submit_paused_suppressed_total: self.driver_task_submit_paused_suppressed_total.load(Ordering::Relaxed),
+            driver_task_submit_failed_total: self
+                .driver_task_submit_failed_total
+                .load(Ordering::Relaxed),
+            driver_task_submit_inflight_suppressed_total: self
+                .driver_task_submit_inflight_suppressed_total
+                .load(Ordering::Relaxed),
+            driver_task_submit_paused_suppressed_total: self
+                .driver_task_submit_paused_suppressed_total
+                .load(Ordering::Relaxed),
             driver_task_finish_total: self.driver_task_finish_total.load(Ordering::Relaxed),
             driver_task_reclaim_total: self.driver_task_reclaim_total.load(Ordering::Relaxed),
-            driver_task_state_conflict_total: self.driver_task_state_conflict_total.load(Ordering::Relaxed),
+            driver_task_state_conflict_total: self
+                .driver_task_state_conflict_total
+                .load(Ordering::Relaxed),
         }
     }
 
@@ -195,7 +240,8 @@ impl DataPlaneMetrics {
                 .fetch_add(as_u64(bytes), Ordering::Relaxed);
         }
         if syscalls > 0 {
-            self.write_syscalls_total.fetch_add(syscalls, Ordering::Relaxed);
+            self.write_syscalls_total
+                .fetch_add(syscalls, Ordering::Relaxed);
         }
         if writev_calls > 0 {
             self.write_writev_calls_total
@@ -232,6 +278,34 @@ impl DataPlaneMetrics {
     }
 
     #[inline]
+    pub fn record_rx_cumulation_copy(&self, copied_bytes: u64) {
+        if copied_bytes > 0 {
+            self.rx_cumulation_copy_bytes_total
+                .fetch_add(copied_bytes, Ordering::Relaxed);
+        }
+    }
+
+    #[inline]
+    pub fn record_rx_lease(&self, tokens: u64, borrowed_bytes: u64) {
+        if tokens > 0 {
+            self.rx_lease_tokens_total
+                .fetch_add(tokens, Ordering::Relaxed);
+        }
+        if borrowed_bytes > 0 {
+            self.rx_lease_borrowed_bytes_total
+                .fetch_add(borrowed_bytes, Ordering::Relaxed);
+        }
+    }
+
+    #[inline]
+    pub fn record_rx_materialize(&self, bytes: u64) {
+        if bytes > 0 {
+            self.rx_materialize_bytes_total
+                .fetch_add(bytes, Ordering::Relaxed);
+        }
+    }
+
+    #[inline]
     pub fn record_flush_limited(&self) {
         self.flush_limited_total.fetch_add(1, Ordering::Relaxed);
     }
@@ -241,10 +315,24 @@ impl DataPlaneMetricsSnapshot {
     #[inline]
     pub fn derive(&self) -> DataPlaneDerivedMetrics {
         DataPlaneDerivedMetrics {
-            write_syscalls_per_kib: scaled_ratio(self.write_syscalls_total, 1024, self.write_bytes_total),
-            write_writev_share_ratio: ratio(self.write_writev_calls_total, self.write_syscalls_total),
-            inbound_copy_bytes_per_read_byte: ratio(self.inbound_copied_bytes_total, self.read_bytes_total),
-            inbound_coalesces_per_mib: scaled_ratio(self.inbound_coalesce_total, 1024 * 1024, self.read_bytes_total),
+            write_syscalls_per_kib: scaled_ratio(
+                self.write_syscalls_total,
+                1024,
+                self.write_bytes_total,
+            ),
+            write_writev_share_ratio: ratio(
+                self.write_writev_calls_total,
+                self.write_syscalls_total,
+            ),
+            inbound_copy_bytes_per_read_byte: ratio(
+                self.inbound_copied_bytes_total,
+                self.read_bytes_total,
+            ),
+            inbound_coalesces_per_mib: scaled_ratio(
+                self.inbound_coalesce_total,
+                1024 * 1024,
+                self.read_bytes_total,
+            ),
         }
     }
 
@@ -252,45 +340,127 @@ impl DataPlaneMetricsSnapshot {
     pub fn saturating_delta_since(&self, base: &Self) -> Self {
         Self {
             accepted_total: self.accepted_total.saturating_sub(base.accepted_total),
-            accept_errors_total: self.accept_errors_total.saturating_sub(base.accept_errors_total),
-            accept_errors_transient_total: self.accept_errors_transient_total.saturating_sub(base.accept_errors_transient_total),
-            accept_errors_fatal_total: self.accept_errors_fatal_total.saturating_sub(base.accept_errors_fatal_total),
-            accept_rejected_total: self.accept_rejected_total.saturating_sub(base.accept_rejected_total),
+            accept_errors_total: self
+                .accept_errors_total
+                .saturating_sub(base.accept_errors_total),
+            accept_errors_transient_total: self
+                .accept_errors_transient_total
+                .saturating_sub(base.accept_errors_transient_total),
+            accept_errors_fatal_total: self
+                .accept_errors_fatal_total
+                .saturating_sub(base.accept_errors_fatal_total),
+            accept_rejected_total: self
+                .accept_rejected_total
+                .saturating_sub(base.accept_rejected_total),
             closed_total: self.closed_total.saturating_sub(base.closed_total),
-            active_connections: self.active_connections.saturating_sub(base.active_connections),
+            active_connections: self
+                .active_connections
+                .saturating_sub(base.active_connections),
             read_bytes_total: self.read_bytes_total.saturating_sub(base.read_bytes_total),
-            write_bytes_total: self.write_bytes_total.saturating_sub(base.write_bytes_total),
-            write_syscalls_total: self.write_syscalls_total.saturating_sub(base.write_syscalls_total),
-            write_writev_calls_total: self.write_writev_calls_total.saturating_sub(base.write_writev_calls_total),
-            backpressure_enter_total: self.backpressure_enter_total.saturating_sub(base.backpressure_enter_total),
-            backpressure_exit_total: self.backpressure_exit_total.saturating_sub(base.backpressure_exit_total),
-            draining_enter_total: self.draining_enter_total.saturating_sub(base.draining_enter_total),
-            draining_exit_total: self.draining_exit_total.saturating_sub(base.draining_exit_total),
-            draining_timeout_total: self.draining_timeout_total.saturating_sub(base.draining_timeout_total),
-            decoded_msgs_total: self.decoded_msgs_total.saturating_sub(base.decoded_msgs_total),
-            decode_errors_total: self.decode_errors_total.saturating_sub(base.decode_errors_total),
-            inbound_frame_too_large_total: self.inbound_frame_too_large_total.saturating_sub(base.inbound_frame_too_large_total),
-            flush_limited_total: self.flush_limited_total.saturating_sub(base.flush_limited_total),
-            inbound_coalesce_total: self.inbound_coalesce_total.saturating_sub(base.inbound_coalesce_total),
-            inbound_copied_bytes_total: self.inbound_copied_bytes_total.saturating_sub(base.inbound_copied_bytes_total),
+            write_bytes_total: self
+                .write_bytes_total
+                .saturating_sub(base.write_bytes_total),
+            write_syscalls_total: self
+                .write_syscalls_total
+                .saturating_sub(base.write_syscalls_total),
+            write_writev_calls_total: self
+                .write_writev_calls_total
+                .saturating_sub(base.write_writev_calls_total),
+            backpressure_enter_total: self
+                .backpressure_enter_total
+                .saturating_sub(base.backpressure_enter_total),
+            backpressure_exit_total: self
+                .backpressure_exit_total
+                .saturating_sub(base.backpressure_exit_total),
+            draining_enter_total: self
+                .draining_enter_total
+                .saturating_sub(base.draining_enter_total),
+            draining_exit_total: self
+                .draining_exit_total
+                .saturating_sub(base.draining_exit_total),
+            draining_timeout_total: self
+                .draining_timeout_total
+                .saturating_sub(base.draining_timeout_total),
+            decoded_msgs_total: self
+                .decoded_msgs_total
+                .saturating_sub(base.decoded_msgs_total),
+            decode_errors_total: self
+                .decode_errors_total
+                .saturating_sub(base.decode_errors_total),
+            inbound_frame_too_large_total: self
+                .inbound_frame_too_large_total
+                .saturating_sub(base.inbound_frame_too_large_total),
+            flush_limited_total: self
+                .flush_limited_total
+                .saturating_sub(base.flush_limited_total),
+            inbound_coalesce_total: self
+                .inbound_coalesce_total
+                .saturating_sub(base.inbound_coalesce_total),
+            inbound_copied_bytes_total: self
+                .inbound_copied_bytes_total
+                .saturating_sub(base.inbound_copied_bytes_total),
+            rx_lease_tokens_total: self
+                .rx_lease_tokens_total
+                .saturating_sub(base.rx_lease_tokens_total),
+            rx_lease_borrowed_bytes_total: self
+                .rx_lease_borrowed_bytes_total
+                .saturating_sub(base.rx_lease_borrowed_bytes_total),
+            rx_materialize_bytes_total: self
+                .rx_materialize_bytes_total
+                .saturating_sub(base.rx_materialize_bytes_total),
+            rx_cumulation_copy_bytes_total: self
+                .rx_cumulation_copy_bytes_total
+                .saturating_sub(base.rx_cumulation_copy_bytes_total),
 
-            driver_schedule_interest_sync_total: self.driver_schedule_interest_sync_total.saturating_sub(base.driver_schedule_interest_sync_total),
-            driver_schedule_reclaim_total: self.driver_schedule_reclaim_total.saturating_sub(base.driver_schedule_reclaim_total),
-            driver_schedule_draining_flush_total: self.driver_schedule_draining_flush_total.saturating_sub(base.driver_schedule_draining_flush_total),
-            driver_schedule_write_kick_total: self.driver_schedule_write_kick_total.saturating_sub(base.driver_schedule_write_kick_total),
-            driver_schedule_flush_followup_total: self.driver_schedule_flush_followup_total.saturating_sub(base.driver_schedule_flush_followup_total),
-            driver_schedule_read_kick_total: self.driver_schedule_read_kick_total.saturating_sub(base.driver_schedule_read_kick_total),
-            driver_schedule_stale_skipped_total: self.driver_schedule_stale_skipped_total.saturating_sub(base.driver_schedule_stale_skipped_total),
-            driver_interest_register_total: self.driver_interest_register_total.saturating_sub(base.driver_interest_register_total),
-            driver_interest_register_skipped_total: self.driver_interest_register_skipped_total.saturating_sub(base.driver_interest_register_skipped_total),
+            driver_schedule_interest_sync_total: self
+                .driver_schedule_interest_sync_total
+                .saturating_sub(base.driver_schedule_interest_sync_total),
+            driver_schedule_reclaim_total: self
+                .driver_schedule_reclaim_total
+                .saturating_sub(base.driver_schedule_reclaim_total),
+            driver_schedule_draining_flush_total: self
+                .driver_schedule_draining_flush_total
+                .saturating_sub(base.driver_schedule_draining_flush_total),
+            driver_schedule_write_kick_total: self
+                .driver_schedule_write_kick_total
+                .saturating_sub(base.driver_schedule_write_kick_total),
+            driver_schedule_flush_followup_total: self
+                .driver_schedule_flush_followup_total
+                .saturating_sub(base.driver_schedule_flush_followup_total),
+            driver_schedule_read_kick_total: self
+                .driver_schedule_read_kick_total
+                .saturating_sub(base.driver_schedule_read_kick_total),
+            driver_schedule_stale_skipped_total: self
+                .driver_schedule_stale_skipped_total
+                .saturating_sub(base.driver_schedule_stale_skipped_total),
+            driver_interest_register_total: self
+                .driver_interest_register_total
+                .saturating_sub(base.driver_interest_register_total),
+            driver_interest_register_skipped_total: self
+                .driver_interest_register_skipped_total
+                .saturating_sub(base.driver_interest_register_skipped_total),
 
-            driver_task_submit_total: self.driver_task_submit_total.saturating_sub(base.driver_task_submit_total),
-            driver_task_submit_failed_total: self.driver_task_submit_failed_total.saturating_sub(base.driver_task_submit_failed_total),
-            driver_task_submit_inflight_suppressed_total: self.driver_task_submit_inflight_suppressed_total.saturating_sub(base.driver_task_submit_inflight_suppressed_total),
-            driver_task_submit_paused_suppressed_total: self.driver_task_submit_paused_suppressed_total.saturating_sub(base.driver_task_submit_paused_suppressed_total),
-            driver_task_finish_total: self.driver_task_finish_total.saturating_sub(base.driver_task_finish_total),
-            driver_task_reclaim_total: self.driver_task_reclaim_total.saturating_sub(base.driver_task_reclaim_total),
-            driver_task_state_conflict_total: self.driver_task_state_conflict_total.saturating_sub(base.driver_task_state_conflict_total),
+            driver_task_submit_total: self
+                .driver_task_submit_total
+                .saturating_sub(base.driver_task_submit_total),
+            driver_task_submit_failed_total: self
+                .driver_task_submit_failed_total
+                .saturating_sub(base.driver_task_submit_failed_total),
+            driver_task_submit_inflight_suppressed_total: self
+                .driver_task_submit_inflight_suppressed_total
+                .saturating_sub(base.driver_task_submit_inflight_suppressed_total),
+            driver_task_submit_paused_suppressed_total: self
+                .driver_task_submit_paused_suppressed_total
+                .saturating_sub(base.driver_task_submit_paused_suppressed_total),
+            driver_task_finish_total: self
+                .driver_task_finish_total
+                .saturating_sub(base.driver_task_finish_total),
+            driver_task_reclaim_total: self
+                .driver_task_reclaim_total
+                .saturating_sub(base.driver_task_reclaim_total),
+            driver_task_state_conflict_total: self
+                .driver_task_state_conflict_total
+                .saturating_sub(base.driver_task_state_conflict_total),
         }
     }
 }
@@ -379,6 +549,9 @@ mod tests {
         m.record_write(2048, 4, 2);
         m.record_decode(5, 1, 2);
         m.record_inbound_cumulation(3, 1024);
+        m.record_rx_lease(2, 2048);
+        m.record_rx_materialize(128);
+        m.record_rx_cumulation_copy(4096);
         m.record_flush_limited();
 
         let snap = m.snapshot();
@@ -391,6 +564,10 @@ mod tests {
         assert_eq!(snap.inbound_frame_too_large_total, 2);
         assert_eq!(snap.inbound_coalesce_total, 3);
         assert_eq!(snap.inbound_copied_bytes_total, 1024);
+        assert_eq!(snap.rx_lease_tokens_total, 2);
+        assert_eq!(snap.rx_lease_borrowed_bytes_total, 2048);
+        assert_eq!(snap.rx_materialize_bytes_total, 128);
+        assert_eq!(snap.rx_cumulation_copy_bytes_total, 4096);
         assert_eq!(snap.flush_limited_total, 1);
     }
 

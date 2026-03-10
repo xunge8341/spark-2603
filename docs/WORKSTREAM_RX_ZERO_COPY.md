@@ -19,23 +19,24 @@
 ## 建议落地路线（分阶段、每阶段都保持 P0 contract 全绿）
 
 ### 阶段 A：先消灭“双重拷贝”（从 2 次降到 1 次）
-**思路：**
-- 对 `ReadData::Token(rx)`，不再立刻 materialize 成 `Bytes`。
-- 改为在 `Channel::on_readable()` 内创建一个 RAII lease guard：
-  - 通过 `rx_ptr_len(rx)` 生成 `&[u8]`（仅本次调用有效）
-  - 调用 `fire_channel_read_raw_stream_slice(&[u8])` 走现有 fast-path
-  - guard drop 时 `release_rx(rx)`
+**终态边界：**
+- 对 `ReadData::Token(rx)` 的 stream (`MsgBoundary::None`) 路径：
+  - 使用 borrowed slice fast-path（仅当前 pipeline 调用栈有效）；
+  - 严禁跨 handler/state/queue/异步任务保存 borrowed slice；
+  - RAII guard 保证 `release_rx` 结构化且仅一次。
+- datagram (`MsgBoundary::Complete`) 仍保持 owned 语义。
+- 当存在 pre-frame handlers（`add_first`）时，强制走 owned fallback，保持可扩展语义。
 
 **收益：**
-- token read 不再额外 copy；
-- stream cumulation 仍有一次 copy（`Cumulation::push_bytes`），但总成本立刻减半。
+- stream token 路径由“token materialize + cumulation copy”变为“borrowed slice + cumulation copy”；
+- Phase A 明确终态是 **1 次 copy**（进入 cumulation tail），不是 0 次 copy。
 
 **门禁：**
 - contract suite 必须全绿（尤其 driver ordering / close semantics / framing roundtrip）
 - 新增一个最小 contract：decode error/early return 也必须 release token exactly once（结构化 drop）
 
 ### 阶段 B：引入 “owned segment append” 关闭零拷贝闭环（从 1 次降到 0 次）
-**思路：**
+**终态边界：**
 - 扩展 cumulation：新增 `Cumulation::push_segment(Bytes)`，用于把 **已拥有的 immutable segment** 直接入队（零拷贝）
 - InboundState 增加 `append_stream_segment(Bytes)`：
   - 小 segment（< threshold）仍 copy into tail（减少碎片）
@@ -47,7 +48,7 @@
 - segment 过小会导致 seg_count 上升，增加跨段 decode/copy 机会 → 需要阈值与统计证据。
 
 ### 阶段 C：后端侧真正提供“可移动”的 owned RX buffer
-**思路：**
+**终态边界：**
 - 扩展 `DynChannel`：提供可选的 `rx_take_bytes(tok) -> Option<Bytes>`（或 `Vec<u8>`）
   - 若后端能把 read buffer 所有权移交给语义层，则阶段 B 的 segment append 真正零拷贝。
   - 否则仍走阶段 A 的 borrowed slice（保持正确性）。
