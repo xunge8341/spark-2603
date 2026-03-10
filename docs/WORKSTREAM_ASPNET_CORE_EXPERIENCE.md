@@ -7,14 +7,15 @@
 
 ## 现状与差距
 
-### 1) Mgmt Profile v1 已冻结，但 ServerConfig 仍平铺字段再组装 profile
-- `docs/MGMT_PROFILE_V1.md` 声明 profile 是 single source of truth；
-- 但 `crates/spark-host/src/config.rs::ServerConfig` 仍保存一套 mgmt 字段，然后 `mgmt_profile_v1()` 组装。
+### 1) Mgmt Profile v1 与 ServerConfig 已收口为单一事实来源
+- `ServerConfig` 仅保存 `mgmt: MgmtTransportProfileV1` 作为管理面配置；
+- 兼容 builder API（如 `with_max_head_bytes/with_max_headers/...`）内部全部委托到 `mgmt`；
+- transport options/config/perf config 构建统一从 `mgmt` 派生。
 
-**风险：**
-- 默认值漂移（两个地方都在“定义默认”）；
-- normalize/validate 逻辑分散；
-- 用户不清楚“改哪里才生效”。
+**收益：**
+- 默认值与 normalize 只在 profile 侧维护；
+- hosting/ember/tests 使用同一份事实来源；
+- 用户入口清晰，不再双轨写入。
 
 ### 2) 缺少 effective config 输出
 - `DataPlaneOptions -> DataPlaneConfig` 有 normalize，但缺少稳定的 `describe_effective()` / `dump_effective()`。
