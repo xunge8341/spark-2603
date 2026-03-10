@@ -342,3 +342,173 @@ where
         self.last.iter().any(|h| h.has_app_backlog())
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::async_bridge::channel::ChannelLimits;
+    use crate::async_bridge::pipeline::context::ChannelHandlerContext;
+    use crate::async_bridge::pipeline::ChannelPipelineBuilder;
+    use crate::evidence::NoopEvidenceSink;
+    use crate::io::{caps, ChannelCaps, IoOps, ReadData, ReadOutcome, RxToken};
+    use crate::policy::FlushPolicy;
+    use spark_core::context::Context as BizContext;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    #[derive(Debug, Default)]
+    struct NoopService;
+
+    #[allow(async_fn_in_trait)]
+    impl Service<Bytes> for NoopService {
+        type Response = Option<Bytes>;
+        type Error = KernelError;
+
+        async fn call(
+            &self,
+            _context: BizContext,
+            _request: Bytes,
+        ) -> core::result::Result<Self::Response, Self::Error> {
+            Ok(None)
+        }
+    }
+
+    #[derive(Debug)]
+    struct MemIo {
+        read: Vec<u8>,
+        boundary: MsgBoundary,
+        leased_once: bool,
+    }
+
+    impl IoOps for MemIo {
+        fn capabilities(&self) -> ChannelCaps {
+            caps::STREAM
+        }
+
+        fn try_read_lease(&mut self) -> Result<ReadOutcome> {
+            if self.leased_once {
+                return Err(KernelError::WouldBlock);
+            }
+            self.leased_once = true;
+            Ok(ReadOutcome {
+                n: self.read.len(),
+                boundary: self.boundary,
+                truncated: false,
+                data: ReadData::Token(RxToken((1u64 << 32) | 1)),
+            })
+        }
+
+        fn try_read_into(&mut self, _dst: &mut [u8]) -> Result<ReadOutcome> {
+            Err(KernelError::Unsupported)
+        }
+
+        fn try_write(&mut self, src: &[u8]) -> Result<usize> {
+            Ok(src.len())
+        }
+
+        fn flush(&mut self) -> Result<()> {
+            Ok(())
+        }
+
+        fn close(&mut self) -> Result<()> {
+            Ok(())
+        }
+
+        fn rx_ptr_len(&mut self, _tok: RxToken) -> Option<(*const u8, usize)> {
+            Some((self.read.as_ptr(), self.read.len()))
+        }
+
+        fn release_rx(&mut self, _tok: RxToken) {
+            self.read.clear();
+        }
+    }
+
+    impl DynChannel for MemIo {
+        fn as_any_mut(&mut self) -> &mut dyn std::any::Any {
+            self
+        }
+    }
+
+    #[derive(Debug)]
+    struct CountingRawHandler {
+        raw_calls: Arc<AtomicUsize>,
+    }
+
+    impl CountingRawHandler {
+        fn new(raw_calls: Arc<AtomicUsize>) -> Self {
+            Self { raw_calls }
+        }
+    }
+
+    impl<A, Ev, Io> ChannelHandler<A, Ev, Io> for CountingRawHandler
+    where
+        Ev: EvidenceSink,
+        Io: DynChannel,
+    {
+        fn channel_read_raw(
+            &mut self,
+            ctx: &mut dyn ChannelHandlerContext<A>,
+            _state: &mut ChannelState<Ev, Io>,
+            boundary: MsgBoundary,
+            bytes: Bytes,
+        ) -> Result<()> {
+            self.raw_calls.fetch_add(1, Ordering::Relaxed);
+            ctx.fire_channel_read_raw(boundary, bytes)
+        }
+    }
+
+    fn make_state(io: MemIo) -> ChannelState<Arc<dyn EvidenceSink>, MemIo> {
+        let limits = ChannelLimits::new(64 * 1024, 1024 * 1024, 512 * 1024);
+        let flush = FlushPolicy::default().budget(limits.max_frame);
+        ChannelState::new(
+            1,
+            io,
+            limits.high_watermark,
+            limits.low_watermark,
+            flush,
+            Arc::new(NoopEvidenceSink),
+        )
+    }
+
+    #[test]
+    fn borrowed_fast_path_skips_pre_frame_handlers() {
+        let raw_calls = Arc::new(AtomicUsize::new(0));
+        let app = Arc::new(NoopService);
+        let mut pipeline =
+            ChannelPipelineBuilder::<NoopService, Arc<dyn EvidenceSink>, MemIo>::new(app)
+                .framing(FrameDecoderProfile::line(64 * 1024))
+                .build();
+        let mut state = make_state(MemIo {
+            read: b"ping\n".to_vec(),
+            boundary: MsgBoundary::None,
+            leased_once: false,
+        });
+
+        pipeline
+            .fire_channel_read_raw_stream_slice(&mut state, b"ping\n")
+            .expect("read stream");
+
+        assert_eq!(raw_calls.load(Ordering::Relaxed), 0);
+    }
+
+    #[test]
+    fn pre_frame_handler_forces_owned_fallback_path() {
+        let raw_calls = Arc::new(AtomicUsize::new(0));
+        let app = Arc::new(NoopService);
+        let mut pipeline =
+            ChannelPipelineBuilder::<NoopService, Arc<dyn EvidenceSink>, MemIo>::new(app)
+                .add_first(CountingRawHandler::new(raw_calls.clone()))
+                .framing(FrameDecoderProfile::line(64 * 1024))
+                .build();
+        let mut state = make_state(MemIo {
+            read: b"ping\n".to_vec(),
+            boundary: MsgBoundary::None,
+            leased_once: false,
+        });
+
+        pipeline
+            .fire_channel_read_raw_stream_slice(&mut state, b"ping\n")
+            .expect("read stream");
+
+        assert_eq!(raw_calls.load(Ordering::Relaxed), 1);
+    }
+}

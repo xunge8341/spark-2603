@@ -17,6 +17,9 @@ use spark_transport::{DataPlaneMetrics, KernelError, Result};
 #[derive(Debug, Default)]
 struct NoopService;
 
+#[derive(Debug, Default)]
+struct ErrorService;
+
 #[allow(async_fn_in_trait)]
 impl Service<Bytes> for NoopService {
     type Response = Option<Bytes>;
@@ -28,6 +31,20 @@ impl Service<Bytes> for NoopService {
         _request: Bytes,
     ) -> core::result::Result<Self::Response, Self::Error> {
         Ok(None)
+    }
+}
+
+#[allow(async_fn_in_trait)]
+impl Service<Bytes> for ErrorService {
+    type Response = Option<Bytes>;
+    type Error = KernelError;
+
+    async fn call(
+        &self,
+        _context: BizContext,
+        _request: Bytes,
+    ) -> core::result::Result<Self::Response, Self::Error> {
+        Err(KernelError::Invalid)
     }
 }
 
@@ -60,6 +77,7 @@ where
 #[derive(Debug)]
 struct LeaseMemChannel {
     read: Vec<u8>,
+    boundary: MsgBoundary,
     lease_supported: bool,
     leased_once: bool,
     released: u64,
@@ -67,9 +85,10 @@ struct LeaseMemChannel {
 }
 
 impl LeaseMemChannel {
-    fn with_input(bytes: &[u8], lease_supported: bool) -> Self {
+    fn with_input(bytes: &[u8], lease_supported: bool, boundary: MsgBoundary) -> Self {
         Self {
             read: bytes.to_vec(),
+            boundary,
             lease_supported,
             leased_once: false,
             released: 0,
@@ -90,13 +109,13 @@ impl IoOps for LeaseMemChannel {
         if !self.lease_supported {
             return Err(KernelError::Unsupported);
         }
-        if self.leased_once || self.read.is_empty() {
+        if self.leased_once {
             return Err(KernelError::WouldBlock);
         }
         self.leased_once = true;
         Ok(ReadOutcome {
             n: self.read.len(),
-            boundary: MsgBoundary::None,
+            boundary: self.boundary,
             truncated: false,
             data: ReadData::Token(RxToken((1u64 << 32) | 1)),
         })
@@ -114,7 +133,7 @@ impl IoOps for LeaseMemChannel {
         self.read.drain(..n);
         Ok(ReadOutcome {
             n,
-            boundary: MsgBoundary::None,
+            boundary: self.boundary,
             truncated: false,
             data: ReadData::Copied,
         })
@@ -155,16 +174,18 @@ impl spark_transport::async_bridge::dyn_channel::DynChannel for LeaseMemChannel 
     }
 }
 
-fn make_channel(io: LeaseMemChannel) -> Channel<NoopService> {
+fn make_channel<A>(io: LeaseMemChannel, max_frame: usize, app: Arc<A>) -> Channel<A>
+where
+    A: Service<Bytes, Response = Option<Bytes>, Error = KernelError> + Send + Sync + 'static,
+{
     let io_box: Box<dyn DynChannel> = Box::new(io);
     let sink: Arc<dyn EvidenceSink> = Arc::new(NoopEvidenceSink);
-    let app = Arc::new(NoopService);
-    let limits = ChannelLimits::new(64 * 1024, 1024 * 1024, 512 * 1024);
+    let limits = ChannelLimits::new(max_frame, 1024 * 1024, 512 * 1024);
     let flush = FlushPolicy::default().budget(limits.max_frame);
     Channel::new_with_profile_and_flush_budget(
         1,
         io_box,
-        FrameDecoderProfile::line(64 * 1024),
+        FrameDecoderProfile::line(max_frame),
         limits,
         flush,
         app,
@@ -174,11 +195,25 @@ fn make_channel(io: LeaseMemChannel) -> Channel<NoopService> {
 
 #[test]
 fn leased_stream_counts_and_releases_once() {
-    let mut ch = make_channel(LeaseMemChannel::with_input(b"ping\n", true));
+    let mut ch = make_channel(
+        LeaseMemChannel::with_input(b"ping\n", true, MsgBoundary::None),
+        64 * 1024,
+        Arc::new(NoopService),
+    );
     let mut read_buf = vec![0u8; 64];
 
-    let (read_bytes, _, _, _, _, _, cumulation_copy_bytes, lease_tokens, lease_borrowed, materialize) =
-        ch.on_readable(&mut read_buf, 8).expect("on_readable");
+    let (
+        read_bytes,
+        _,
+        _,
+        _,
+        _,
+        _,
+        cumulation_copy_bytes,
+        lease_tokens,
+        lease_borrowed,
+        materialize,
+    ) = ch.on_readable(&mut read_buf, 8).expect("on_readable");
 
     assert_eq!(read_bytes, 5);
     assert_eq!(lease_tokens, 1);
@@ -201,17 +236,123 @@ fn leased_stream_counts_and_releases_once() {
 
 #[test]
 fn unsupported_lease_path_has_no_lease_counters() {
-    let mut ch = make_channel(LeaseMemChannel::with_input(b"ping\n", false));
+    let mut ch = make_channel(
+        LeaseMemChannel::with_input(b"ping\n", false, MsgBoundary::None),
+        64 * 1024,
+        Arc::new(NoopService),
+    );
     let mut read_buf = vec![0u8; 64];
 
-    let (read_bytes, _, _, _, _, _, cumulation_copy_bytes, lease_tokens, lease_borrowed, materialize) =
-        ch.on_readable(&mut read_buf, 8).expect("on_readable");
+    let (
+        read_bytes,
+        _,
+        _,
+        _,
+        _,
+        _,
+        cumulation_copy_bytes,
+        lease_tokens,
+        lease_borrowed,
+        materialize,
+    ) = ch.on_readable(&mut read_buf, 8).expect("on_readable");
 
     assert_eq!(read_bytes, 5);
     assert_eq!(lease_tokens, 0);
     assert_eq!(lease_borrowed, 0);
     assert_eq!(materialize, 0);
     assert_eq!(cumulation_copy_bytes, 5);
+}
+
+#[test]
+fn release_once_on_decode_error() {
+    let mut ch = make_channel(
+        LeaseMemChannel::with_input(b"abcde", true, MsgBoundary::None),
+        4,
+        Arc::new(NoopService),
+    );
+    let mut read_buf = vec![0u8; 64];
+
+    let res = ch.on_readable(&mut read_buf, 8);
+    match res {
+        Ok((_, _, decode_errs, _, _, _, _, _, _, _)) => assert!(decode_errs >= 1),
+        Err(KernelError::Closed) => {}
+        Err(e) => panic!("unexpected error: {e:?}"),
+    }
+
+    let io = ch
+        .io_mut()
+        .as_any_mut()
+        .downcast_mut::<LeaseMemChannel>()
+        .expect("lease mem io");
+    assert_eq!(io.released, 1);
+}
+
+#[test]
+fn release_once_on_handler_error() {
+    let mut ch = make_channel(
+        LeaseMemChannel::with_input(b"ping\n", true, MsgBoundary::None),
+        64 * 1024,
+        Arc::new(ErrorService),
+    );
+    let mut read_buf = vec![0u8; 64];
+
+    let _ = ch.on_readable(&mut read_buf, 8).expect("on_readable");
+
+    if let Some(mut fut) = ch.take_app_future() {
+        let out = poll_to_ready(Pin::new(&mut fut));
+        ch.on_app_complete(out);
+    }
+
+    let io = ch
+        .io_mut()
+        .as_any_mut()
+        .downcast_mut::<LeaseMemChannel>()
+        .expect("lease mem io");
+    assert_eq!(io.released, 1);
+}
+
+#[test]
+fn release_once_on_early_return_empty_chunk() {
+    let mut ch = make_channel(
+        LeaseMemChannel::with_input(b"", true, MsgBoundary::None),
+        64 * 1024,
+        Arc::new(NoopService),
+    );
+    let mut read_buf = vec![0u8; 64];
+
+    let (read_bytes, _, _, _, _, _, _, _, _, _) =
+        ch.on_readable(&mut read_buf, 8).expect("on_readable");
+    assert_eq!(read_bytes, 0);
+
+    let io = ch
+        .io_mut()
+        .as_any_mut()
+        .downcast_mut::<LeaseMemChannel>()
+        .expect("lease mem io");
+    assert_eq!(io.released, 1);
+}
+
+#[test]
+fn datagram_token_materializes_owned_payload() {
+    let mut ch = make_channel(
+        LeaseMemChannel::with_input(b"ping", true, MsgBoundary::Complete),
+        64 * 1024,
+        Arc::new(NoopService),
+    );
+    let mut read_buf = vec![0u8; 64];
+
+    let (_, _, _, _, _, _, _, lease_tokens, lease_borrowed, materialize) =
+        ch.on_readable(&mut read_buf, 8).expect("on_readable");
+    assert_eq!(lease_tokens, 0);
+    assert_eq!(lease_borrowed, 0);
+    assert_eq!(materialize, 4);
+
+    let io = ch
+        .io_mut()
+        .as_any_mut()
+        .downcast_mut::<LeaseMemChannel>()
+        .expect("lease mem io");
+    assert_eq!(io.released, 1);
 }
 
 #[test]
