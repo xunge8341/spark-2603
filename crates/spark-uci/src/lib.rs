@@ -9,7 +9,10 @@ pub struct TaskToken {
 }
 
 impl TaskToken {
-    pub const NULL: Self = Self { idx: u32::MAX, gen: 0 };
+    pub const NULL: Self = Self {
+        idx: u32::MAX,
+        gen: 0,
+    };
 }
 
 /// Receive buffer token, stable cursor for zero-copy receive.
@@ -117,14 +120,12 @@ pub mod names {
         pub const CLOSE_COMPLETE: &str = "CloseComplete";
         pub const ABORTIVE_CLOSE: &str = "AbortiveClose";
 
-
         // Unit mappings (stable).
         pub const UNITMAP_BACKPRESSURE_BYTES_V1: &str = "bp_bytes_v1";
         pub const UNITMAP_DRAINING_V1: &str = "draining_v1";
         pub const UNITMAP_FLUSH_LIMITED_V1: &str = "flush_limited_v1";
         pub const UNITMAP_FRAME_TOO_LARGE_V1: &str = "frame_too_large_v1";
         pub const UNITMAP_CLOSE_V1: &str = "close_v1";
-
     }
 
     /// Metrics naming contract.
@@ -159,21 +160,29 @@ pub mod names {
         pub const INBOUND_COALESCE_TOTAL: &str = "inbound_coalesce_total";
         pub const INBOUND_COPIED_BYTES_TOTAL: &str = "inbound_copied_bytes_total";
 
+        pub const RX_LEASE_TOKENS_TOTAL: &str = "rx_lease_tokens_total";
+        pub const RX_LEASE_BORROWED_BYTES_TOTAL: &str = "rx_lease_borrowed_bytes_total";
+        pub const RX_MATERIALIZE_BYTES_TOTAL: &str = "rx_materialize_bytes_total";
+        pub const RX_CUMULATION_COPY_BYTES_TOTAL: &str = "rx_cumulation_copy_bytes_total";
+
         // Driver scheduling kernel (internal, stable counter names).
         //
         // These metrics help explain dataplane behavior without changing user-visible semantics.
         // They are intentionally label-free (suffix-only) to keep the naming contract simple.
         pub const DRIVER_SCHEDULE_INTEREST_SYNC_TOTAL: &str = "driver_schedule_interest_sync_total";
         pub const DRIVER_SCHEDULE_RECLAIM_TOTAL: &str = "driver_schedule_reclaim_total";
-        pub const DRIVER_SCHEDULE_DRAINING_FLUSH_TOTAL: &str = "driver_schedule_draining_flush_total";
+        pub const DRIVER_SCHEDULE_DRAINING_FLUSH_TOTAL: &str =
+            "driver_schedule_draining_flush_total";
         pub const DRIVER_SCHEDULE_WRITE_KICK_TOTAL: &str = "driver_schedule_write_kick_total";
-        pub const DRIVER_SCHEDULE_FLUSH_FOLLOWUP_TOTAL: &str = "driver_schedule_flush_followup_total";
+        pub const DRIVER_SCHEDULE_FLUSH_FOLLOWUP_TOTAL: &str =
+            "driver_schedule_flush_followup_total";
         pub const DRIVER_SCHEDULE_READ_KICK_TOTAL: &str = "driver_schedule_read_kick_total";
         pub const DRIVER_SCHEDULE_STALE_SKIPPED_TOTAL: &str = "driver_schedule_stale_skipped_total";
 
         // Reactor register de-dup (internal, stable counter names).
         pub const DRIVER_INTEREST_REGISTER_TOTAL: &str = "driver_interest_register_total";
-        pub const DRIVER_INTEREST_REGISTER_SKIPPED_TOTAL: &str = "driver_interest_register_skipped_total";
+        pub const DRIVER_INTEREST_REGISTER_SKIPPED_TOTAL: &str =
+            "driver_interest_register_skipped_total";
 
         // Driver task ownership (internal, stable counter names).
         pub const DRIVER_TASK_SUBMIT_TOTAL: &str = "driver_task_submit_total";

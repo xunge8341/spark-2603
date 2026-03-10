@@ -1,16 +1,16 @@
 use crate::io::{MsgBoundary, ReadData};
 use crate::policy::FlushBudget;
 use crate::reactor::Interest;
-use crate::{KernelError, Result, RxToken};
-use crate::uci::EvidenceEvent;
 use crate::uci::names::evidence as ev_names;
+use crate::uci::EvidenceEvent;
+use crate::{KernelError, Result, RxToken};
 
 use spark_buffer::Bytes;
 use std::time::{Duration, Instant};
 
 use super::dyn_channel::DynChannel;
-use super::outbound_frame::OutboundFrame;
 use super::outbound_buffer::{FlushStatus, OutboundBuffer, WritabilityChange};
+use super::outbound_frame::OutboundFrame;
 use crate::evidence::EvidenceSink;
 
 /// 从 `RxToken` 解码出 `chan_id`（编码格式：`(chan_id<<32) | gen`）。
@@ -18,7 +18,6 @@ use crate::evidence::EvidenceSink;
 pub fn tok_chan_id(tok: RxToken) -> u32 {
     (tok.0 >> 32) as u32
 }
-
 
 /// A single read chunk returned by `ChannelState::read_once`.
 ///
@@ -29,7 +28,11 @@ pub fn tok_chan_id(tok: RxToken) -> u32 {
 ///   to the application layer.
 #[derive(Debug)]
 pub enum ReadChunk<'a> {
-    /// Borrowed bytes from the caller-provided read buffer.
+    /// Borrowed bytes only valid within the current pipeline call stack.
+    ///
+    /// Contract:
+    /// - Never store this slice across handler/state/queue boundaries.
+    /// - Never move it into async tasks/futures.
     Borrowed(&'a [u8]),
     /// Owned bytes (e.g. leased token materialized, or datagram copy).
     Owned(Bytes),
@@ -81,7 +84,6 @@ where
     Ev: EvidenceSink,
     Io: DynChannel,
 {
-
     chan_id: u32,
     io: Io,
     outbound: OutboundBuffer,
@@ -102,7 +104,6 @@ where
     close_cause: CloseCause,
     // Ensure CloseComplete evidence is emitted at most once.
     close_complete_emitted: bool,
-
 
     // Draining 状态（Channel 级）：停止读、允许写 flush，并在满足条件后 close。
     draining: bool,
@@ -126,6 +127,10 @@ where
     inbound_coalesce_acc: u64,
     inbound_copied_bytes_acc: u64,
     inbound_frame_too_large_acc: u64,
+    rx_cumulation_copy_bytes_acc: u64,
+    rx_lease_tokens_acc: u64,
+    rx_lease_borrowed_bytes_acc: u64,
+    rx_materialize_bytes_acc: u64,
 }
 
 impl<Ev, Io> core::fmt::Debug for ChannelState<Ev, Io>
@@ -133,7 +138,6 @@ where
     Ev: EvidenceSink,
     Io: DynChannel,
 {
-
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         // 注意：`DynChannel` 可能不实现 Debug（例如内部包裹 socket/mio handle）。
         // 这里仅输出对排障有价值的状态字段。
@@ -146,7 +150,10 @@ where
             .field("peer_eof", &self.peer_eof)
             .field("inbound_coalesce_acc", &self.inbound_coalesce_acc)
             .field("inbound_copied_bytes_acc", &self.inbound_copied_bytes_acc)
-            .field("inbound_frame_too_large_acc", &self.inbound_frame_too_large_acc)
+            .field(
+                "inbound_frame_too_large_acc",
+                &self.inbound_frame_too_large_acc,
+            )
             .finish()
     }
 }
@@ -156,7 +163,6 @@ where
     Ev: EvidenceSink,
     Io: DynChannel,
 {
-
     pub fn new(
         chan_id: u32,
         io: Io,
@@ -186,6 +192,10 @@ where
             inbound_coalesce_acc: 0,
             inbound_copied_bytes_acc: 0,
             inbound_frame_too_large_acc: 0,
+            rx_cumulation_copy_bytes_acc: 0,
+            rx_lease_tokens_acc: 0,
+            rx_lease_borrowed_bytes_acc: 0,
+            rx_materialize_bytes_acc: 0,
         }
     }
 
@@ -382,7 +392,6 @@ where
         self.close_requested
     }
 
-
     /// Record a close-causing I/O error for observability.
     ///
     /// Contract: this is best-effort and must not allocate.
@@ -441,7 +450,6 @@ where
     pub fn is_writable(&self) -> bool {
         self.outbound.is_writable()
     }
-
 
     /// 入队 outbound bytes（对应 Netty/DotNetty 的 `write()`）。
     ///
@@ -530,11 +538,11 @@ where
     /// Read one payload chunk and invoke `f` while the chunk is still valid.
     ///
     /// Design notes:
-    /// - Stream token reads may now stay borrowed for the duration of `f`, avoiding the
-    ///   previous eager materialize/copy on the token path.
-    /// - Datagram payloads remain owned because they may be forwarded beyond the current call.
+    /// - Stream token reads may stay borrowed for the duration of `f`.
+    /// - Borrowed bytes are stack-scoped to this call and must not be retained.
+    /// - Datagram payloads stay owned because they can cross queue/handler boundaries.
     /// - Token release stays structural (RAII), and happens exactly once after `f` returns.
-    pub fn with_read_chunk<'a, R, F>(&mut self, read_buf: &'a mut [u8], f: F) -> Result<R>
+    pub fn with_read_chunk<R, F>(&mut self, read_buf: &mut [u8], f: F) -> Result<R>
     where
         F: FnOnce(&mut Self, MsgBoundary, ReadChunk<'_>) -> Result<R>,
     {
@@ -543,16 +551,21 @@ where
             Ok(outcome) => match outcome.data {
                 ReadData::Token(rx) => {
                     if outcome.boundary == MsgBoundary::None {
-                        self.with_stream_token(rx, |state, chunk| f(state, MsgBoundary::None, chunk))
+                        self.with_stream_token(rx, |state, chunk| {
+                            f(state, MsgBoundary::None, chunk)
+                        })
                     } else {
                         let bytes = materialize_rx_token(&mut self.io, rx)?;
+                        self.record_rx_materialize_bytes(bytes.len());
                         f(self, outcome.boundary, ReadChunk::Owned(bytes))
                     }
                 }
                 ReadData::Copied => {
                     // Contract: `try_read_lease()` must never return `Copied`.
                     // Backends that cannot lease must return `Err(Unsupported)` and implement `try_read_into()`.
-                    Err(KernelError::Internal(crate::error_codes::ERR_LEASE_CONTRACT_COPIED))
+                    Err(KernelError::Internal(
+                        crate::error_codes::ERR_LEASE_CONTRACT_COPIED,
+                    ))
                 }
             },
             Err(KernelError::Unsupported) => {
@@ -572,20 +585,16 @@ where
         }
     }
 
-
     fn with_stream_token<R, F>(&mut self, tok: RxToken, f: F) -> Result<R>
     where
         F: FnOnce(&mut Self, ReadChunk<'_>) -> Result<R>,
     {
-        struct RxTokenGuard<Io> {
+        struct RxTokenGuard<Io: DynChannel> {
             chan: *mut Io,
             tok: RxToken,
         }
 
-        impl<Io> Drop for RxTokenGuard<Io>
-        where
-            Io: DynChannel,
-        {
+        impl<Io: DynChannel> Drop for RxTokenGuard<Io> {
             fn drop(&mut self) {
                 // SAFETY:
                 // - `chan` originates from `&mut self.io` in this function.
@@ -596,7 +605,9 @@ where
         }
 
         let Some((ptr, len)) = self.io.rx_ptr_len(tok) else {
-            return Err(KernelError::Internal(crate::error_codes::ERR_RX_PTR_LEN_NONE));
+            return Err(KernelError::Internal(
+                crate::error_codes::ERR_RX_PTR_LEN_NONE,
+            ));
         };
 
         // SAFETY:
@@ -608,9 +619,23 @@ where
             chan: &mut self.io as *mut Io,
             tok,
         };
+        self.record_rx_lease_borrowed(bytes.len());
         let result = f(self, ReadChunk::Borrowed(bytes));
         drop(guard);
         result
+    }
+
+    #[inline]
+    fn record_rx_lease_borrowed(&mut self, bytes: usize) {
+        self.rx_lease_tokens_acc = self.rx_lease_tokens_acc.saturating_add(1);
+        self.rx_lease_borrowed_bytes_acc = self
+            .rx_lease_borrowed_bytes_acc
+            .saturating_add(bytes as u64);
+    }
+
+    #[inline]
+    fn record_rx_materialize_bytes(&mut self, bytes: usize) {
+        self.rx_materialize_bytes_acc = self.rx_materialize_bytes_acc.saturating_add(bytes as u64);
     }
 
     /// decode handler 调用：累加“本轮”decoded 计数。
@@ -647,7 +672,14 @@ where
         });
     }
 
-    
+    #[inline]
+    pub fn record_rx_cumulation_copy_bytes(&mut self, copied_bytes: usize) {
+        if copied_bytes > 0 {
+            self.rx_cumulation_copy_bytes_acc = self
+                .rx_cumulation_copy_bytes_acc
+                .saturating_add(copied_bytes as u64);
+        }
+    }
 
     /// decode handler 调用：记录本轮 cumulation copy/coalesce 统计。
     #[inline]
@@ -666,18 +698,36 @@ where
 
     /// 取走本轮 decode 统计。
     #[inline]
-    pub fn take_decode_stats(&mut self) -> (usize, usize, u64, u64, u64) {
+    pub fn take_decode_stats(&mut self) -> (usize, usize, u64, u64, u64, u64, u64, u64, u64) {
         let d = self.decoded_acc;
         let e = self.decode_err_acc;
         let c = self.inbound_coalesce_acc;
         let b = self.inbound_copied_bytes_acc;
         let tl = self.inbound_frame_too_large_acc;
+        let cumulation_copy_bytes = self.rx_cumulation_copy_bytes_acc;
+        let lease_tokens = self.rx_lease_tokens_acc;
+        let lease_borrowed = self.rx_lease_borrowed_bytes_acc;
+        let materialize_bytes = self.rx_materialize_bytes_acc;
         self.decoded_acc = 0;
         self.decode_err_acc = 0;
         self.inbound_coalesce_acc = 0;
         self.inbound_copied_bytes_acc = 0;
         self.inbound_frame_too_large_acc = 0;
-        (d, e, tl, c, b)
+        self.rx_cumulation_copy_bytes_acc = 0;
+        self.rx_lease_tokens_acc = 0;
+        self.rx_lease_borrowed_bytes_acc = 0;
+        self.rx_materialize_bytes_acc = 0;
+        (
+            d,
+            e,
+            tl,
+            c,
+            b,
+            cumulation_copy_bytes,
+            lease_tokens,
+            lease_borrowed,
+            materialize_bytes,
+        )
     }
 }
 
@@ -707,7 +757,9 @@ fn materialize_rx_token(chan: &mut dyn DynChannel, tok: RxToken) -> Result<Bytes
     // bring-up 阶段：统一通过 IoOps 的 token-view（可选）接口 materialize。
     // 这样 transport 语义层不会绑定任何具体后端类型（TCP/UDP/串口/…）。
     let Some((ptr, len)) = g.chan.rx_ptr_len(tok) else {
-        return Err(KernelError::Internal(crate::error_codes::ERR_RX_PTR_LEN_NONE));
+        return Err(KernelError::Internal(
+            crate::error_codes::ERR_RX_PTR_LEN_NONE,
+        ));
     };
 
     // materialize: copy raw parts into owned bytes.

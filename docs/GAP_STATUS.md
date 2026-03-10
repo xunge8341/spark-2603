@@ -33,8 +33,8 @@ It is intentionally short and **trunk-focused**（将军赶路不打小鬼）.
 **Now:** lease/token exists, but token path is still materialized into owned bytes and then copied again into stream cumulation.
 **North Star:** stream RX is zero-copy first; copying is reserved for explicit retention/fallback paths and backed by metrics.
 **Next action:** close the RX loop in two stages:
-1) remove *double copy* (lease token -> borrowed slice fast-path with RAII release);
-2) add an owned-segment append path (`Cumulation::push_segment(Bytes)`) to allow true zero-copy for large reads.
+1) **Phase A 收口**：lease token -> borrowed slice fast-path + RAII release，终态为 1 次 copy（cumulation tail）；
+2) 之后再评估是否进入 Phase B（owned-segment append）以冲击 0-copy。
 
 ### Gap 2 — “可控分配”还缺证据闭环与硬上限（**current focus**）
 **Now:** watermarks gate writability but do not hard-cap pending outbound bytes; queue growth can be app-driven.

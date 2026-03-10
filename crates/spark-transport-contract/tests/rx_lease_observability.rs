@@ -8,9 +8,7 @@ use spark_core::service::Service;
 
 use spark_transport::async_bridge::channel::ChannelLimits;
 use spark_transport::async_bridge::dyn_boundary::Channel;
-use spark_transport::async_bridge::{
-    BorrowedDecodePolicy, BorrowedDecodePolicyDenial, DynChannel, FrameDecoderProfile,
-};
+use spark_transport::async_bridge::{DynChannel, FrameDecoderProfile};
 use spark_transport::evidence::{EvidenceSink, NoopEvidenceSink};
 use spark_transport::io::{caps, ChannelCaps, IoOps, MsgBoundary, ReadData, ReadOutcome, RxToken};
 use spark_transport::policy::FlushPolicy;
@@ -62,7 +60,6 @@ where
 #[derive(Debug)]
 struct LeaseMemChannel {
     read: Vec<u8>,
-    written: Vec<u8>,
     lease_supported: bool,
     leased_once: bool,
     released: u64,
@@ -73,17 +70,11 @@ impl LeaseMemChannel {
     fn with_input(bytes: &[u8], lease_supported: bool) -> Self {
         Self {
             read: bytes.to_vec(),
-            written: Vec::new(),
             lease_supported,
             leased_once: false,
             released: 0,
             closed: false,
         }
-    }
-
-    fn push_read(&mut self, bytes: &[u8]) {
-        self.read.extend_from_slice(bytes);
-        self.leased_once = false;
     }
 }
 
@@ -133,7 +124,6 @@ impl IoOps for LeaseMemChannel {
         if self.closed {
             return Err(KernelError::Closed);
         }
-        self.written.extend_from_slice(src);
         Ok(src.len())
     }
 
@@ -166,173 +156,35 @@ impl spark_transport::async_bridge::dyn_channel::DynChannel for LeaseMemChannel 
 }
 
 fn make_channel(io: LeaseMemChannel) -> Channel<NoopService> {
-    make_channel_with_profile(io, FrameDecoderProfile::line(64 * 1024))
-}
-
-fn make_channel_with_profile(
-    io: LeaseMemChannel,
-    profile: FrameDecoderProfile,
-) -> Channel<NoopService> {
     let io_box: Box<dyn DynChannel> = Box::new(io);
     let sink: Arc<dyn EvidenceSink> = Arc::new(NoopEvidenceSink);
     let app = Arc::new(NoopService);
     let limits = ChannelLimits::new(64 * 1024, 1024 * 1024, 512 * 1024);
     let flush = FlushPolicy::default().budget(limits.max_frame);
-    Channel::new_with_profile_and_flush_budget(1, io_box, profile, limits, flush, app, sink)
+    Channel::new_with_profile_and_flush_budget(
+        1,
+        io_box,
+        FrameDecoderProfile::line(64 * 1024),
+        limits,
+        flush,
+        app,
+        sink,
+    )
 }
 
 #[test]
-fn borrowed_decode_policy_table_is_explicit_for_supported_profiles() {
-    assert_eq!(
-        FrameDecoderProfile::line(64 * 1024).borrowed_decode_policy(),
-        BorrowedDecodePolicy::ExactSingleFrame
-    );
-    assert_eq!(
-        FrameDecoderProfile::delimiter(64 * 1024, b"|", false)
-            .expect("delimiter profile")
-            .borrowed_decode_policy(),
-        BorrowedDecodePolicy::ExactSingleFrame
-    );
-    assert_eq!(
-        FrameDecoderProfile::length_field(
-            64 * 1024,
-            4,
-            spark_transport::async_bridge::ByteOrder::Big,
-        )
-        .expect("length-field profile")
-        .borrowed_decode_policy(),
-        BorrowedDecodePolicy::Deny(BorrowedDecodePolicyDenial::LengthField)
-    );
-    assert_eq!(
-        FrameDecoderProfile::varint32(64 * 1024).borrowed_decode_policy(),
-        BorrowedDecodePolicy::Deny(BorrowedDecodePolicyDenial::Varint32)
-    );
-    assert_eq!(
-        FrameDecoderProfile::http1(64 * 1024).borrowed_decode_policy(),
-        BorrowedDecodePolicy::Deny(BorrowedDecodePolicyDenial::Http1)
-    );
-}
-
-#[test]
-fn leased_stream_borrowed_decode_is_counted_and_released() {
+fn leased_stream_counts_and_releases_once() {
     let mut ch = make_channel(LeaseMemChannel::with_input(b"ping\n", true));
     let mut read_buf = vec![0u8; 64];
 
-    let (
-        read_bytes,
-        _decoded,
-        _errs,
-        _too_large,
-        _coalesce,
-        _copied,
-        leased,
-        materialize,
-        materialize_bytes,
-        fallback,
-        borrowed_attempt,
-        borrowed_hit,
-        borrowed_bytes,
-        borrowed_fallback,
-        borrowed_fallback_remainder,
-        borrowed_fallback_partial,
-        borrowed_fallback_policy,
-    ) = ch.on_readable(&mut read_buf, 8).expect("on_readable");
+    let (read_bytes, _, _, _, _, _, cumulation_copy_bytes, lease_tokens, lease_borrowed, materialize) =
+        ch.on_readable(&mut read_buf, 8).expect("on_readable");
 
     assert_eq!(read_bytes, 5);
-    assert_eq!(leased, 1);
+    assert_eq!(lease_tokens, 1);
+    assert_eq!(lease_borrowed, 5);
     assert_eq!(materialize, 0);
-    assert_eq!(materialize_bytes, 0);
-    assert_eq!(fallback, 0);
-    assert_eq!(borrowed_attempt, 1);
-    assert_eq!(borrowed_hit, 1);
-    assert_eq!(borrowed_bytes, 5);
-    assert_eq!(borrowed_fallback, 0);
-    assert_eq!(borrowed_fallback_remainder, 0);
-    assert_eq!(borrowed_fallback_partial, 0);
-    assert_eq!(borrowed_fallback_policy, 0);
-
-    if let Some(mut fut) = ch.take_app_future() {
-        let out = poll_to_ready(Pin::new(&mut fut));
-        ch.on_app_complete(out);
-    }
-
-    let io = ch
-        .io_mut()
-        .as_any_mut()
-        .downcast_mut::<LeaseMemChannel>()
-        .expect("lease mem io");
-    assert_eq!(io.released, 1);
-
-    let metrics = DataPlaneMetrics::default();
-    metrics.record_rx_observability(leased, materialize, materialize_bytes, fallback);
-    metrics.record_rx_borrowed_decode(
-        borrowed_attempt,
-        borrowed_hit,
-        borrowed_bytes,
-        borrowed_fallback,
-    );
-    metrics.record_rx_borrowed_decode_fallback_reasons(
-        borrowed_fallback_remainder,
-        borrowed_fallback_partial,
-        borrowed_fallback_policy,
-    );
-    let snap = metrics.snapshot();
-    assert_eq!(snap.inbound_rx_leased_total, 1);
-    assert_eq!(snap.inbound_rx_materialize_total, 0);
-    assert_eq!(snap.inbound_rx_materialize_bytes_total, 0);
-    assert_eq!(snap.inbound_rx_lease_fallback_total, 0);
-    assert_eq!(snap.inbound_rx_borrowed_decode_attempt_total, 1);
-    assert_eq!(snap.inbound_rx_borrowed_decode_hit_total, 1);
-    assert_eq!(snap.inbound_rx_borrowed_decode_bytes_total, 5);
-    assert_eq!(snap.inbound_rx_borrowed_decode_fallback_total, 0);
-    assert_eq!(snap.inbound_rx_borrowed_decode_fallback_remainder_total, 0);
-    assert_eq!(snap.inbound_rx_borrowed_decode_fallback_partial_total, 0);
-    assert_eq!(
-        snap.inbound_rx_borrowed_decode_fallback_decoder_policy_total,
-        0
-    );
-}
-
-#[test]
-fn leased_delimiter_stream_borrowed_decode_is_counted_and_released() {
-    let mut ch = make_channel_with_profile(
-        LeaseMemChannel::with_input(b"ping|", true),
-        FrameDecoderProfile::delimiter(64 * 1024, b"|", false).expect("delimiter profile"),
-    );
-    let mut read_buf = vec![0u8; 64];
-
-    let (
-        read_bytes,
-        _decoded,
-        _errs,
-        _too_large,
-        _coalesce,
-        _copied,
-        leased,
-        materialize,
-        materialize_bytes,
-        fallback,
-        borrowed_attempt,
-        borrowed_hit,
-        borrowed_bytes,
-        borrowed_fallback,
-        borrowed_fallback_remainder,
-        borrowed_fallback_partial,
-        borrowed_fallback_policy,
-    ) = ch.on_readable(&mut read_buf, 8).expect("on_readable");
-
-    assert_eq!(read_bytes, 5);
-    assert_eq!(leased, 1);
-    assert_eq!(materialize, 0);
-    assert_eq!(materialize_bytes, 0);
-    assert_eq!(fallback, 0);
-    assert_eq!(borrowed_attempt, 1);
-    assert_eq!(borrowed_hit, 1);
-    assert_eq!(borrowed_bytes, 5);
-    assert_eq!(borrowed_fallback, 0);
-    assert_eq!(borrowed_fallback_remainder, 0);
-    assert_eq!(borrowed_fallback_partial, 0);
-    assert_eq!(borrowed_fallback_policy, 0);
+    assert_eq!(cumulation_copy_bytes, 5);
 
     if let Some(mut fut) = ch.take_app_future() {
         let out = poll_to_ready(Pin::new(&mut fut));
@@ -348,386 +200,30 @@ fn leased_delimiter_stream_borrowed_decode_is_counted_and_released() {
 }
 
 #[test]
-fn leased_stream_borrowed_decode_remainder_fallback_is_counted_and_released() {
-    let mut ch = make_channel(LeaseMemChannel::with_input(b"ping\npong", true));
-    let mut read_buf = vec![0u8; 64];
-
-    let (
-        read_bytes,
-        decoded,
-        errs,
-        _too_large,
-        _coalesce,
-        copied,
-        leased,
-        materialize,
-        materialize_bytes,
-        fallback,
-        borrowed_attempt,
-        borrowed_hit,
-        borrowed_bytes,
-        borrowed_fallback,
-        borrowed_fallback_remainder,
-        borrowed_fallback_partial,
-        borrowed_fallback_policy,
-    ) = ch.on_readable(&mut read_buf, 8).expect("on_readable");
-
-    assert_eq!(read_bytes, 9);
-    assert_eq!(decoded, 1);
-    assert_eq!(errs, 0);
-    assert_eq!(copied, 0);
-    assert_eq!(leased, 1);
-    assert_eq!(materialize, 0);
-    assert_eq!(materialize_bytes, 0);
-    assert_eq!(fallback, 0);
-    assert_eq!(borrowed_attempt, 1);
-    assert_eq!(borrowed_hit, 0);
-    assert_eq!(borrowed_bytes, 0);
-    assert_eq!(borrowed_fallback, 1);
-    assert_eq!(borrowed_fallback_remainder, 1);
-    assert_eq!(borrowed_fallback_partial, 0);
-    assert_eq!(borrowed_fallback_policy, 0);
-
-    if let Some(mut fut) = ch.take_app_future() {
-        let out = poll_to_ready(Pin::new(&mut fut));
-        ch.on_app_complete(out);
-    }
-
-    let io = ch
-        .io_mut()
-        .as_any_mut()
-        .downcast_mut::<LeaseMemChannel>()
-        .expect("lease mem io");
-    assert_eq!(io.released, 1);
-}
-
-#[test]
-fn leased_stream_borrowed_decode_partial_fallback_is_counted_and_released() {
-    let mut ch = make_channel(LeaseMemChannel::with_input(b"ping", true));
-    let mut read_buf = vec![0u8; 64];
-
-    let (
-        read_bytes,
-        decoded,
-        errs,
-        _too_large,
-        _coalesce,
-        copied,
-        leased,
-        materialize,
-        materialize_bytes,
-        fallback,
-        borrowed_attempt,
-        borrowed_hit,
-        borrowed_bytes,
-        borrowed_fallback,
-        borrowed_fallback_remainder,
-        borrowed_fallback_partial,
-        borrowed_fallback_policy,
-    ) = ch.on_readable(&mut read_buf, 8).expect("on_readable");
-
-    assert_eq!(read_bytes, 4);
-    assert_eq!(decoded, 0);
-    assert_eq!(errs, 0);
-    assert_eq!(copied, 0);
-    assert_eq!(leased, 1);
-    assert_eq!(materialize, 0);
-    assert_eq!(materialize_bytes, 0);
-    assert_eq!(fallback, 0);
-    assert_eq!(borrowed_attempt, 1);
-    assert_eq!(borrowed_hit, 0);
-    assert_eq!(borrowed_bytes, 0);
-    assert_eq!(borrowed_fallback, 1);
-    assert_eq!(borrowed_fallback_remainder, 0);
-    assert_eq!(borrowed_fallback_partial, 1);
-    assert_eq!(borrowed_fallback_policy, 0);
-
-    let io = ch
-        .io_mut()
-        .as_any_mut()
-        .downcast_mut::<LeaseMemChannel>()
-        .expect("lease mem io");
-    assert_eq!(io.released, 1);
-}
-
-#[test]
-fn borrowed_decode_decoder_policy_fallback_is_counted_and_released() {
-    let mut ch = make_channel_with_profile(
-        LeaseMemChannel::with_input(b"\x04ping", true),
-        FrameDecoderProfile::varint32(64 * 1024),
-    );
-    let mut read_buf = vec![0u8; 64];
-
-    let (
-        read_bytes,
-        decoded,
-        errs,
-        _too_large,
-        _coalesce,
-        copied,
-        leased,
-        materialize,
-        materialize_bytes,
-        fallback,
-        borrowed_attempt,
-        borrowed_hit,
-        borrowed_bytes,
-        borrowed_fallback,
-        borrowed_fallback_remainder,
-        borrowed_fallback_partial,
-        borrowed_fallback_policy,
-    ) = ch.on_readable(&mut read_buf, 8).expect("on_readable");
-
-    assert_eq!(read_bytes, 5);
-    assert_eq!(decoded, 1);
-    assert_eq!(errs, 0);
-    assert_eq!(copied, 0);
-    assert_eq!(leased, 1);
-    assert_eq!(materialize, 0);
-    assert_eq!(materialize_bytes, 0);
-    assert_eq!(fallback, 0);
-    assert_eq!(borrowed_attempt, 1);
-    assert_eq!(borrowed_hit, 0);
-    assert_eq!(borrowed_bytes, 0);
-    assert_eq!(borrowed_fallback, 1);
-    assert_eq!(borrowed_fallback_remainder, 0);
-    assert_eq!(borrowed_fallback_partial, 0);
-    assert_eq!(borrowed_fallback_policy, 1);
-
-    if let Some(mut fut) = ch.take_app_future() {
-        let out = poll_to_ready(Pin::new(&mut fut));
-        ch.on_app_complete(out);
-    }
-
-    let io = ch
-        .io_mut()
-        .as_any_mut()
-        .downcast_mut::<LeaseMemChannel>()
-        .expect("lease mem io");
-    assert_eq!(io.released, 1);
-}
-
-#[test]
-fn leased_stream_multi_message_buffer_falls_back_and_releases() {
-    let mut ch = make_channel(LeaseMemChannel::with_input(b"ping\npong\n", true));
-    let mut read_buf = vec![0u8; 64];
-
-    let (
-        read_bytes,
-        decoded,
-        errs,
-        _too_large,
-        _coalesce,
-        copied,
-        leased,
-        materialize,
-        materialize_bytes,
-        fallback,
-        borrowed_attempt,
-        borrowed_hit,
-        borrowed_bytes,
-        borrowed_fallback,
-        borrowed_fallback_remainder,
-        borrowed_fallback_partial,
-        borrowed_fallback_policy,
-    ) = ch.on_readable(&mut read_buf, 8).expect("on_readable");
-
-    assert_eq!(read_bytes, 10);
-    assert_eq!(decoded, 2);
-    assert_eq!(errs, 0);
-    assert_eq!(copied, 0);
-    assert_eq!(leased, 1);
-    assert_eq!(materialize, 0);
-    assert_eq!(materialize_bytes, 0);
-    assert_eq!(fallback, 0);
-    assert_eq!(borrowed_attempt, 1);
-    assert_eq!(borrowed_hit, 0);
-    assert_eq!(borrowed_bytes, 0);
-    assert_eq!(borrowed_fallback, 1);
-    assert_eq!(borrowed_fallback_remainder, 1);
-    assert_eq!(borrowed_fallback_partial, 0);
-    assert_eq!(borrowed_fallback_policy, 0);
-
-    if let Some(mut fut) = ch.take_app_future() {
-        let out = poll_to_ready(Pin::new(&mut fut));
-        ch.on_app_complete(out);
-    }
-    if let Some(mut fut) = ch.take_app_future() {
-        let out = poll_to_ready(Pin::new(&mut fut));
-        ch.on_app_complete(out);
-    }
-
-    let io = ch
-        .io_mut()
-        .as_any_mut()
-        .downcast_mut::<LeaseMemChannel>()
-        .expect("lease mem io");
-    assert_eq!(io.released, 1);
-}
-
-#[test]
-fn leased_stream_partial_followed_by_next_read_stays_off_borrowed_fast_path() {
-    let mut ch = make_channel(LeaseMemChannel::with_input(b"ping", true));
-    let mut read_buf = vec![0u8; 64];
-
-    let (
-        read_bytes,
-        decoded,
-        errs,
-        _too_large,
-        _coalesce,
-        copied,
-        leased,
-        materialize,
-        materialize_bytes,
-        fallback,
-        borrowed_attempt,
-        borrowed_hit,
-        borrowed_bytes,
-        borrowed_fallback,
-        borrowed_fallback_remainder,
-        borrowed_fallback_partial,
-        borrowed_fallback_policy,
-    ) = ch.on_readable(&mut read_buf, 8).expect("on_readable");
-
-    assert_eq!(read_bytes, 4);
-    assert_eq!(decoded, 0);
-    assert_eq!(errs, 0);
-    assert_eq!(copied, 0);
-    assert_eq!(leased, 1);
-    assert_eq!(materialize, 0);
-    assert_eq!(materialize_bytes, 0);
-    assert_eq!(fallback, 0);
-    assert_eq!(borrowed_attempt, 1);
-    assert_eq!(borrowed_hit, 0);
-    assert_eq!(borrowed_bytes, 0);
-    assert_eq!(borrowed_fallback, 1);
-    assert_eq!(borrowed_fallback_remainder, 0);
-    assert_eq!(borrowed_fallback_partial, 1);
-    assert_eq!(borrowed_fallback_policy, 0);
-
-    let io = ch
-        .io_mut()
-        .as_any_mut()
-        .downcast_mut::<LeaseMemChannel>()
-        .expect("lease mem io");
-    io.push_read(b"\n");
-
-    let (
-        read_bytes,
-        decoded,
-        errs,
-        _too_large,
-        _coalesce,
-        copied,
-        leased,
-        materialize,
-        materialize_bytes,
-        fallback,
-        borrowed_attempt,
-        borrowed_hit,
-        borrowed_bytes,
-        borrowed_fallback,
-        borrowed_fallback_remainder,
-        borrowed_fallback_partial,
-        borrowed_fallback_policy,
-    ) = ch
-        .on_readable(&mut read_buf, 8)
-        .expect("second on_readable");
-
-    assert_eq!(read_bytes, 1);
-    assert_eq!(decoded, 1);
-    assert_eq!(errs, 0);
-    assert_eq!(copied, 0);
-    assert_eq!(leased, 1);
-    assert_eq!(materialize, 0);
-    assert_eq!(materialize_bytes, 0);
-    assert_eq!(fallback, 0);
-    assert_eq!(borrowed_attempt, 1);
-    assert_eq!(borrowed_hit, 0);
-    assert_eq!(borrowed_bytes, 0);
-    assert_eq!(borrowed_fallback, 1);
-    assert_eq!(borrowed_fallback_remainder, 1);
-    assert_eq!(borrowed_fallback_partial, 0);
-    assert_eq!(borrowed_fallback_policy, 0);
-
-    if let Some(mut fut) = ch.take_app_future() {
-        let out = poll_to_ready(Pin::new(&mut fut));
-        ch.on_app_complete(out);
-    }
-
-    let io = ch
-        .io_mut()
-        .as_any_mut()
-        .downcast_mut::<LeaseMemChannel>()
-        .expect("lease mem io");
-    assert_eq!(io.released, 2);
-}
-
-#[test]
-fn unsupported_lease_path_is_counted_as_fallback() {
+fn unsupported_lease_path_has_no_lease_counters() {
     let mut ch = make_channel(LeaseMemChannel::with_input(b"ping\n", false));
     let mut read_buf = vec![0u8; 64];
 
-    let (
-        read_bytes,
-        _decoded,
-        _errs,
-        _too_large,
-        _coalesce,
-        _copied,
-        leased,
-        materialize,
-        materialize_bytes,
-        fallback,
-        borrowed_attempt,
-        borrowed_hit,
-        borrowed_bytes,
-        borrowed_fallback,
-        borrowed_fallback_remainder,
-        borrowed_fallback_partial,
-        borrowed_fallback_policy,
-    ) = ch.on_readable(&mut read_buf, 8).expect("on_readable");
+    let (read_bytes, _, _, _, _, _, cumulation_copy_bytes, lease_tokens, lease_borrowed, materialize) =
+        ch.on_readable(&mut read_buf, 8).expect("on_readable");
 
     assert_eq!(read_bytes, 5);
-    assert_eq!(leased, 0);
+    assert_eq!(lease_tokens, 0);
+    assert_eq!(lease_borrowed, 0);
     assert_eq!(materialize, 0);
-    assert_eq!(materialize_bytes, 0);
-    assert!(fallback >= 1);
-    assert_eq!(borrowed_attempt, 0);
-    assert_eq!(borrowed_hit, 0);
-    assert_eq!(borrowed_bytes, 0);
-    assert_eq!(borrowed_fallback, 0);
-    assert_eq!(borrowed_fallback_remainder, 0);
-    assert_eq!(borrowed_fallback_partial, 0);
-    assert_eq!(borrowed_fallback_policy, 0);
+    assert_eq!(cumulation_copy_bytes, 5);
+}
 
+#[test]
+fn metrics_expose_phase_a_rx_counters() {
     let metrics = DataPlaneMetrics::default();
-    metrics.record_rx_observability(leased, materialize, materialize_bytes, fallback);
-    metrics.record_rx_borrowed_decode(
-        borrowed_attempt,
-        borrowed_hit,
-        borrowed_bytes,
-        borrowed_fallback,
-    );
-    metrics.record_rx_borrowed_decode_fallback_reasons(
-        borrowed_fallback_remainder,
-        borrowed_fallback_partial,
-        borrowed_fallback_policy,
-    );
+    metrics.record_rx_lease(2, 10);
+    metrics.record_rx_materialize(4);
+    metrics.record_rx_cumulation_copy(6);
+
     let snap = metrics.snapshot();
-    assert_eq!(snap.inbound_rx_leased_total, 0);
-    assert_eq!(snap.inbound_rx_materialize_total, 0);
-    assert_eq!(snap.inbound_rx_materialize_bytes_total, 0);
-    assert!(snap.inbound_rx_lease_fallback_total >= 1);
-    assert_eq!(snap.inbound_rx_borrowed_decode_attempt_total, 0);
-    assert_eq!(snap.inbound_rx_borrowed_decode_hit_total, 0);
-    assert_eq!(snap.inbound_rx_borrowed_decode_bytes_total, 0);
-    assert_eq!(snap.inbound_rx_borrowed_decode_fallback_total, 0);
-    assert_eq!(snap.inbound_rx_borrowed_decode_fallback_remainder_total, 0);
-    assert_eq!(snap.inbound_rx_borrowed_decode_fallback_partial_total, 0);
-    assert_eq!(
-        snap.inbound_rx_borrowed_decode_fallback_decoder_policy_total,
-        0
-    );
+    assert_eq!(snap.rx_lease_tokens_total, 2);
+    assert_eq!(snap.rx_lease_borrowed_bytes_total, 10);
+    assert_eq!(snap.rx_materialize_bytes_total, 4);
+    assert_eq!(snap.rx_cumulation_copy_bytes_total, 6);
 }

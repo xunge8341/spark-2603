@@ -1,18 +1,18 @@
-use spark_core::context::Context as DecodeContext;
+use super::super::dyn_channel::DynChannel;
+use crate::evidence::EvidenceSink;
 use crate::io::MsgBoundary;
 use crate::{KernelError, Result};
-use crate::evidence::EvidenceSink;
-use super::super::dyn_channel::DynChannel;
+use spark_core::context::Context as DecodeContext;
 
 use spark_buffer::Bytes;
 
 #[cfg(feature = "mgmt-http1")]
 use super::http1_inbound::{Http1AppendError, Http1InboundState};
 
-use super::context::ChannelHandlerContext;
-use super::handler::ChannelHandler;
 use super::super::channel_state::ChannelState;
 use super::super::inbound_state::InboundState;
+use super::context::ChannelHandlerContext;
+use super::handler::ChannelHandler;
 use super::FrameDecoderProfile;
 
 /// TCP stream 的 framing handler（对齐 Netty `ByteToMessageDecoder` 的职责位置）。
@@ -36,15 +36,21 @@ impl StreamFrameDecoderHandler {
     pub fn new(profile: FrameDecoderProfile) -> Self {
         let inbound = match profile {
             FrameDecoderProfile::Line { max_frame } => InboundState::new_line(max_frame),
-            FrameDecoderProfile::Delimiter { max_frame, delimiter, include_delimiter } => {
-                InboundState::new_delimiter(max_frame, delimiter, include_delimiter)
-            }
-            FrameDecoderProfile::LengthField { max_frame, field_len, order } => {
-                InboundState::new_length_field(max_frame, field_len as usize, order)
-                    .unwrap_or_else(|| InboundState::new_line(max_frame))
-            }
+            FrameDecoderProfile::Delimiter {
+                max_frame,
+                delimiter,
+                include_delimiter,
+            } => InboundState::new_delimiter(max_frame, delimiter, include_delimiter),
+            FrameDecoderProfile::LengthField {
+                max_frame,
+                field_len,
+                order,
+            } => InboundState::new_length_field(max_frame, field_len as usize, order)
+                .unwrap_or_else(|| InboundState::new_line(max_frame)),
             FrameDecoderProfile::Varint32 { max_frame } => InboundState::new_varint32(max_frame),
-            FrameDecoderProfile::Http1 { max_request_bytes, .. } => {
+            FrameDecoderProfile::Http1 {
+                max_request_bytes, ..
+            } => {
                 // Unused for HTTP/1 profile (handled by `http1` state), but keep it initialized.
                 InboundState::new_line(max_request_bytes)
             }
@@ -57,9 +63,15 @@ impl StreamFrameDecoderHandler {
 
             #[cfg(feature = "mgmt-http1")]
             http1: match profile {
-                FrameDecoderProfile::Http1 { max_request_bytes, max_head_bytes, max_headers } => {
-                    Some(Http1InboundState::new(max_request_bytes, max_head_bytes, max_headers))
-                }
+                FrameDecoderProfile::Http1 {
+                    max_request_bytes,
+                    max_head_bytes,
+                    max_headers,
+                } => Some(Http1InboundState::new(
+                    max_request_bytes,
+                    max_head_bytes,
+                    max_headers,
+                )),
                 _ => None,
             },
         }
@@ -80,11 +92,18 @@ impl StreamFrameDecoderHandler {
             | FrameDecoderProfile::Delimiter { .. }
             | FrameDecoderProfile::LengthField { .. }
             | FrameDecoderProfile::Varint32 { .. } => {
-                match self.inbound.append_stream_bytes(&mut self.decode_ctx, bytes) {
+                match self
+                    .inbound
+                    .append_stream_bytes(&mut self.decode_ctx, bytes)
+                {
                     Ok(batch) => {
                         if batch.coalesce_count > 0 || batch.copied_bytes > 0 {
-                            state.record_inbound_cumulation(batch.coalesce_count, batch.copied_bytes);
+                            state.record_inbound_cumulation(
+                                batch.coalesce_count,
+                                batch.copied_bytes,
+                            );
                         }
+                        state.record_rx_cumulation_copy_bytes(batch.cumulation_copy_bytes);
                         while let Some(msg) = self.inbound.pop_ready() {
                             state.record_decoded(1);
                             ctx.fire_channel_read(msg)?;
@@ -107,14 +126,20 @@ impl StreamFrameDecoderHandler {
                 #[cfg(feature = "mgmt-http1")]
                 {
                     let Some(http1) = self.http1.as_mut() else {
-                        return Err(KernelError::Internal(crate::error_codes::ERR_INTERNAL_HTTP1_STATE));
+                        return Err(KernelError::Internal(
+                            crate::error_codes::ERR_INTERNAL_HTTP1_STATE,
+                        ));
                     };
 
                     match http1.append_stream_bytes(&mut self.decode_ctx, bytes) {
                         Ok(batch) => {
                             if batch.coalesce_count > 0 || batch.copied_bytes > 0 {
-                                state.record_inbound_cumulation(batch.coalesce_count, batch.copied_bytes);
+                                state.record_inbound_cumulation(
+                                    batch.coalesce_count,
+                                    batch.copied_bytes,
+                                );
                             }
+                            state.record_rx_cumulation_copy_bytes(batch.cumulation_copy_bytes);
                             while let Some(req) = http1.pop_ready() {
                                 state.record_decoded(1);
                                 ctx.fire_channel_read(req)?;
@@ -150,7 +175,6 @@ where
     Ev: EvidenceSink,
     Io: DynChannel,
 {
-
     fn channel_read_raw(
         &mut self,
         ctx: &mut dyn ChannelHandlerContext<A>,
@@ -183,23 +207,35 @@ where
         // 清理 cumulation 与队列（释放内存/避免复用污染）。
         self.inbound = match self.profile {
             FrameDecoderProfile::Line { max_frame } => InboundState::new_line(max_frame),
-            FrameDecoderProfile::Delimiter { max_frame, delimiter, include_delimiter } => {
-                InboundState::new_delimiter(max_frame, delimiter, include_delimiter)
-            }
-            FrameDecoderProfile::LengthField { max_frame, field_len, order } => {
-                InboundState::new_length_field(max_frame, field_len as usize, order)
-                    .unwrap_or_else(|| InboundState::new_line(max_frame))
-            }
+            FrameDecoderProfile::Delimiter {
+                max_frame,
+                delimiter,
+                include_delimiter,
+            } => InboundState::new_delimiter(max_frame, delimiter, include_delimiter),
+            FrameDecoderProfile::LengthField {
+                max_frame,
+                field_len,
+                order,
+            } => InboundState::new_length_field(max_frame, field_len as usize, order)
+                .unwrap_or_else(|| InboundState::new_line(max_frame)),
             FrameDecoderProfile::Varint32 { max_frame } => InboundState::new_varint32(max_frame),
-            FrameDecoderProfile::Http1 { max_request_bytes, .. } => InboundState::new_line(max_request_bytes),
+            FrameDecoderProfile::Http1 {
+                max_request_bytes, ..
+            } => InboundState::new_line(max_request_bytes),
         };
 
         #[cfg(feature = "mgmt-http1")]
         {
             self.http1 = match self.profile {
-                FrameDecoderProfile::Http1 { max_request_bytes, max_head_bytes, max_headers } => {
-                    Some(Http1InboundState::new(max_request_bytes, max_head_bytes, max_headers))
-                }
+                FrameDecoderProfile::Http1 {
+                    max_request_bytes,
+                    max_head_bytes,
+                    max_headers,
+                } => Some(Http1InboundState::new(
+                    max_request_bytes,
+                    max_head_bytes,
+                    max_headers,
+                )),
                 _ => None,
             };
         }

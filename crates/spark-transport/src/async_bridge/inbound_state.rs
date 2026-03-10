@@ -7,7 +7,8 @@ use spark_core::context::Context;
 use crate::{KernelError, Result};
 
 use super::framers::{
-    DelimiterFramer, FrameSpec, LengthFieldPrefixFramer, LineFramer, StreamDecodeError, StreamFramer, Varint32Framer,
+    DelimiterFramer, FrameSpec, LengthFieldPrefixFramer, LineFramer, StreamDecodeError,
+    StreamFramer, Varint32Framer,
 };
 use super::pipeline::DelimiterSpec;
 
@@ -17,6 +18,8 @@ pub struct DecodeBatchStats {
     pub produced: usize,
     pub coalesce_count: usize,
     pub copied_bytes: usize,
+    /// Bytes copied when appending into cumulation tail (`push_bytes`).
+    pub cumulation_copy_bytes: usize,
 }
 
 /// Per-connection inbound (read-path) state.
@@ -45,7 +48,11 @@ impl InboundState {
         }
     }
 
-    pub fn new_delimiter(max_frame: usize, delimiter: DelimiterSpec, include_delimiter: bool) -> Self {
+    pub fn new_delimiter(
+        max_frame: usize,
+        delimiter: DelimiterSpec,
+        include_delimiter: bool,
+    ) -> Self {
         Self {
             cumulation: Cumulation::with_capacity(max_frame.min(64 * 1024)),
             framer: StreamFramer::Delimiter(DelimiterFramer::new(
@@ -105,6 +112,10 @@ impl InboundState {
 
     /// Append newly read stream bytes and decode as many complete messages as possible.
     ///
+    /// Boundary contract:
+    /// - `bytes` is consumed synchronously in this call and copied into cumulation tail.
+    /// - Borrowed input must not be retained beyond this function.
+    ///
     /// Decoded messages are exposed as `Bytes`.
     pub fn append_stream_bytes(
         &mut self,
@@ -114,7 +125,10 @@ impl InboundState {
         let _ = ctx;
         self.cumulation.push_bytes(bytes);
 
-        let mut stats = DecodeBatchStats::default();
+        let mut stats = DecodeBatchStats {
+            cumulation_copy_bytes: bytes.len(),
+            ..DecodeBatchStats::default()
+        };
 
         // Bound per-call work to avoid starving other connections.
         const MAX_DECODE_PER_CALL: usize = 32;
@@ -124,7 +138,11 @@ impl InboundState {
                 break;
             }
 
-            let Some(spec) = self.framer.decode(&self.cumulation).map_err(map_decode_err)? else {
+            let Some(spec) = self
+                .framer
+                .decode(&self.cumulation)
+                .map_err(map_decode_err)?
+            else {
                 break;
             };
 

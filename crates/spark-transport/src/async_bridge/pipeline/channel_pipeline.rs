@@ -10,8 +10,8 @@ use crate::{KernelError, Result};
 
 use super::super::channel_state::ChannelState;
 use super::super::dyn_channel::DynChannel;
-use super::super::OutboundFrame;
 use super::super::task::AppFuture;
+use super::super::OutboundFrame;
 use super::context::EventCtx;
 use super::event::PipelineEvent;
 use super::frame_decoder::StreamFrameDecoderHandler;
@@ -20,8 +20,8 @@ use super::handler::ChannelHandler;
 use super::head::HeadHandler;
 use super::service_handler::AppServiceHandler;
 use super::tail::TailHandler;
-use super::HandlerVec;
 use super::FrameDecoderProfile;
+use super::HandlerVec;
 
 /// 每连接的 `ChannelPipeline`（bring-up 版本，trampoline 驱动）。
 ///
@@ -41,7 +41,7 @@ where
 {
     // ---- core handlers (static dispatch) ----
     head: HeadHandler,
-	encoder: StreamFrameEncoderHandler,
+    encoder: StreamFrameEncoderHandler,
     frame: StreamFrameDecoderHandler,
     app: AppServiceHandler<A>,
     tail: TailHandler,
@@ -80,7 +80,12 @@ where
     /// 默认 pipeline（对外 API）。
     #[allow(dead_code)]
     pub fn new_default(app: Arc<A>, max_frame: usize) -> Self {
-        Self::new_with_extras(app, FrameDecoderProfile::line(max_frame), Vec::new(), Vec::new())
+        Self::new_with_extras(
+            app,
+            FrameDecoderProfile::line(max_frame),
+            Vec::new(),
+            Vec::new(),
+        )
     }
 
     /// 生成 pipeline（允许插入额外 handler）。
@@ -208,11 +213,11 @@ where
         self.pump(state)
     }
 
-
     /// Fast-path for stream reads: accept a borrowed slice and feed it into the frame decoder.
     ///
     /// Contract:
     /// - Only valid for `MsgBoundary::None` (stream/TCP).
+    /// - Borrowed slice lifetime is call-stack scoped; it must not cross queue/handler/task boundaries.
     /// - When there are pre-frame handlers (`add_first`), we fall back to the owned-bytes path
     ///   to preserve extensibility and avoid lifetime pitfalls.
     pub fn fire_channel_read_raw_stream_slice(

@@ -1,20 +1,20 @@
-use std::sync::Arc;
 use std::sync::atomic::Ordering;
+use std::sync::Arc;
 use std::task::{Context as TaskContext, Poll};
 
 use spark_buffer::Bytes;
 
-use spark_core::service::Service;
 use crate::executor::{Executor, RunStatus, TaskRunner};
 use crate::reactor::{Interest, KernelEvent, Reactor};
 use crate::{Budget, KernelError, Result, RxToken, TaskToken};
+use spark_core::service::Service;
 
+use super::pipeline::FrameDecoderProfile;
+use crate::evidence::{EvidenceHandle, EvidenceSink};
 use crate::lease::{LeaseRegistry, RxLease};
 use crate::metrics::DataPlaneMetrics;
-use crate::slab::Slab;
-use crate::evidence::{EvidenceHandle, EvidenceSink};
 use crate::policy::{FlushBudget, FlushPolicy, WatermarkPolicy};
-use super::pipeline::FrameDecoderProfile;
+use crate::slab::Slab;
 
 use super::channel::{Channel, ChannelLimits};
 use super::channel_state::tok_chan_id;
@@ -64,7 +64,6 @@ impl ScheduleReason {
         }
     }
 }
-
 
 #[inline]
 fn record_schedule_enqueue(metrics: &DataPlaneMetrics, reason: ScheduleReason) {
@@ -123,7 +122,6 @@ struct TaskSlotState {
     token: Option<TaskToken>,
 }
 
-
 /// Per-slot reactor interest cache for the current live generation.
 ///
 /// This de-duplicates `reactor.register()` calls and enables edge-triggered backends
@@ -133,8 +131,6 @@ struct InterestSlotState {
     chan_id: Option<u32>,
     interest: Interest,
 }
-
-
 
 #[inline]
 fn registered_interest_on(interest_state: &[InterestSlotState], chan_id: u32) -> Interest {
@@ -194,11 +190,7 @@ fn task_is_inflight_on(task_state: &[TaskSlotState], chan_id: u32) -> bool {
 }
 
 #[inline]
-fn bind_task_token_on(
-    task_state: &mut [TaskSlotState],
-    chan_id: u32,
-    token: TaskToken,
-) -> bool {
+fn bind_task_token_on(task_state: &mut [TaskSlotState], chan_id: u32, token: TaskToken) -> bool {
     let idx = chan_index(chan_id);
     let Some(state) = task_state.get_mut(idx) else {
         return false;
@@ -495,7 +487,11 @@ where
             limits,
             metrics,
             evidence,
-            DriverConfig::new(policy, FrameDecoderProfile::line(max_frame), FlushPolicy::default()),
+            DriverConfig::new(
+                policy,
+                FrameDecoderProfile::line(max_frame),
+                FlushPolicy::default(),
+            ),
         )
     }
 
@@ -576,7 +572,8 @@ where
             max_frame: cfg.max_frame_hint(),
         };
         let config = DriverConfig::new(cfg.watermark, cfg.framing, cfg.flush_policy);
-        let mut driver = Self::new_with_config(reactor, executor, app, limits, metrics, evidence, config);
+        let mut driver =
+            Self::new_with_config(reactor, executor, app, limits, metrics, evidence, config);
         driver.drain_timeout = cfg.drain_timeout;
         driver
     }
@@ -648,10 +645,7 @@ where
         let Some(idx) = self.free.pop() else {
             return Err(KernelError::NoMem);
         };
-        let gen = *self
-            .slot_gen
-            .get(idx as usize)
-            .unwrap_or(&1u32);
+        let gen = *self.slot_gen.get(idx as usize).unwrap_or(&1u32);
         // bump generation for the next reuse
         if let Some(g) = self.slot_gen.get_mut(idx as usize) {
             *g = chan_next_gen(gen);
@@ -683,7 +677,6 @@ where
         self.free.push(slot);
     }
 
-
     pub fn install_channel(&mut self, chan_id: u32, chan: Io) -> Result<()>
     where
         R: Reactor,
@@ -694,7 +687,9 @@ where
         }
         if self.channels[idx].is_some() {
             // Should never happen: chan_id is allocated from the free list.
-            return Err(KernelError::Internal(crate::error_codes::ERR_CHAN_SLOT_OCCUPIED));
+            return Err(KernelError::Internal(
+                crate::error_codes::ERR_CHAN_SLOT_OCCUPIED,
+            ));
         }
 
         let limits = ChannelLimits::new(self.max_frame, self.high_watermark, self.low_watermark);
@@ -722,7 +717,9 @@ where
                 self.metrics
                     .driver_task_state_conflict_total
                     .fetch_add(1, Ordering::Relaxed);
-                return Err(KernelError::Internal(crate::error_codes::ERR_TASK_STATE_CONFLICT));
+                return Err(KernelError::Internal(
+                    crate::error_codes::ERR_TASK_STATE_CONFLICT,
+                ));
             }
             *state = TaskSlotState {
                 chan_id: Some(chan_id),
@@ -761,13 +758,14 @@ where
         let mut n = 0usize;
         let limit = budget.max_events.max(1) as usize;
         while n < limit {
-            let Some(tok) = self.wake_q.pop() else { break; };
+            let Some(tok) = self.wake_q.pop() else {
+                break;
+            };
             self.executor.submit(tok, 128)?;
             n += 1;
         }
         Ok(n)
     }
-
 
     #[inline]
     fn queue_schedule_reason(&mut self, reason: ScheduleReason, chan_id: u32) -> bool {
@@ -857,7 +855,10 @@ where
             return Ok(());
         }
 
-        if let Some(tok) = self.slab.insert(TaskSlot { chan_id, state: TaskState::New }) {
+        if let Some(tok) = self.slab.insert(TaskSlot {
+            chan_id,
+            state: TaskState::New,
+        }) {
             self.metrics
                 .driver_task_submit_total
                 .fetch_add(1, Ordering::Relaxed);
@@ -869,7 +870,9 @@ where
                     .driver_task_state_conflict_total
                     .fetch_add(1, Ordering::Relaxed);
                 self.slab.free(tok);
-                return Err(KernelError::Internal(crate::error_codes::ERR_TASK_STATE_CONFLICT));
+                return Err(KernelError::Internal(
+                    crate::error_codes::ERR_TASK_STATE_CONFLICT,
+                ));
             }
             if let Err(err) = self.executor.submit(tok, 128) {
                 self.metrics
@@ -1017,7 +1020,7 @@ where
                     slab: &mut self.slab,
                     channels: &mut self.channels,
                     task_state: &mut self.task_state,
-                interest_state: &mut self.interest_state,
+                    interest_state: &mut self.interest_state,
                     read_buf: &mut self.read_buf,
                     wake_q: &self.wake_q,
                     schedule_state: &mut self.schedule_state,
@@ -1080,7 +1083,11 @@ where
                 let prev = registered_interest_on(interest_state, chan_id);
 
                 if ch.is_draining() {
-                    let inflight = if task_is_inflight_on(task_state, chan_id) { 1 } else { 0 };
+                    let inflight = if task_is_inflight_on(task_state, chan_id) {
+                        1
+                    } else {
+                        0
+                    };
                     ch.poll_draining(inflight);
                 }
 
@@ -1353,7 +1360,6 @@ where
             return Err(KernelError::Invalid);
         }
 
-
         // 通过 IoOps 的 token-view（可选）接口做 lease。
         // 说明：
         // - 语义层不再 downcast 到具体后端（TCP/UDP/…），避免 runtime/transport 绑定；
@@ -1440,16 +1446,12 @@ where
         self.slab.free(token);
     }
 
-
     #[inline]
     fn queue_schedule_reason(&mut self, reason: ScheduleReason, chan_id: u32) -> bool {
         let enqueued = match reason {
-            ScheduleReason::FlushFollowup => queue_schedule_reason_on(
-                reason,
-                self.schedule_state,
-                self.pending_flush,
-                chan_id,
-            ),
+            ScheduleReason::FlushFollowup => {
+                queue_schedule_reason_on(reason, self.schedule_state, self.pending_flush, chan_id)
+            }
             ScheduleReason::ReadKick => queue_schedule_reason_on(
                 reason,
                 self.schedule_state,
@@ -1457,7 +1459,11 @@ where
                 chan_id,
             ),
             _ => {
-                debug_assert!(false, "runner only owns follow-up work queues: {:?}", reason);
+                debug_assert!(
+                    false,
+                    "runner only owns follow-up work queues: {:?}",
+                    reason
+                );
                 false
             }
         };
@@ -1548,12 +1554,20 @@ where
 
                     // Read + decode loop（bounded）。
                     const MAX_READS_PER_CALL: usize = 8;
-                    let (read_bytes, decoded, decode_errs, too_large, coalesce_count, copied_bytes) = match ch.on_readable(
-                        &mut self.read_buf[..],
-                        MAX_READS_PER_CALL,
-                    ) {
+                    let (
+                        read_bytes,
+                        decoded,
+                        decode_errs,
+                        too_large,
+                        coalesce_count,
+                        copied_bytes,
+                        cumulation_copy_bytes,
+                        lease_tokens,
+                        lease_borrowed_bytes,
+                        materialize_bytes,
+                    ) = match ch.on_readable(&mut self.read_buf[..], MAX_READS_PER_CALL) {
                         Ok(v) => v,
-                        Err(KernelError::WouldBlock) => (0, 0, 0, 0, 0, 0),
+                        Err(KernelError::WouldBlock) => (0, 0, 0, 0, 0, 0, 0, 0, 0, 0),
                         Err(KernelError::Closed) => {
                             // P0 contract: deterministically transition to close so the driver can reclaim the slot.
                             // Metrics are accounted in `reclaim_channel` to avoid double-counting.
@@ -1579,7 +1593,12 @@ where
                     self.metrics.record_read(read_bytes);
                     self.metrics.record_decode(decoded, decode_errs, too_large);
                     self.metrics
+                        .record_rx_lease(lease_tokens, lease_borrowed_bytes);
+                    self.metrics.record_rx_materialize(materialize_bytes);
+                    self.metrics
                         .record_inbound_cumulation(coalesce_count, copied_bytes);
+                    self.metrics
+                        .record_rx_cumulation_copy(cumulation_copy_bytes);
 
                     if let Some(fut) = ch.take_app_future() {
                         slot.state = TaskState::App { fut };
@@ -1662,12 +1681,11 @@ where
     }
 }
 
-
 #[cfg(test)]
 mod tests {
     use super::{
-        bind_task_token_on, chan_pack, queue_schedule_reason_on, take_schedule_batch, take_task_token_on,
-        ScheduleReason, ScheduleSlotState, TaskSlotState,
+        bind_task_token_on, chan_pack, queue_schedule_reason_on, take_schedule_batch,
+        take_task_token_on, ScheduleReason, ScheduleSlotState, TaskSlotState,
     };
     use crate::TaskToken;
 
@@ -1712,21 +1730,13 @@ mod tests {
             chan_id,
         ));
 
-        let (todo, _stale) = take_schedule_batch(
-            ScheduleReason::WriteKick,
-            &mut state,
-            &mut write_queue,
-            8,
-        );
+        let (todo, _stale) =
+            take_schedule_batch(ScheduleReason::WriteKick, &mut state, &mut write_queue, 8);
         assert_eq!(todo, vec![chan_id]);
         assert_eq!(read_queue, vec![chan_id]);
 
-        let (todo, _stale) = take_schedule_batch(
-            ScheduleReason::ReadKick,
-            &mut state,
-            &mut read_queue,
-            8,
-        );
+        let (todo, _stale) =
+            take_schedule_batch(ScheduleReason::ReadKick, &mut state, &mut read_queue, 8);
         assert_eq!(todo, vec![chan_id]);
         assert_eq!(state[3], ScheduleSlotState::default());
     }
@@ -1751,12 +1761,8 @@ mod tests {
             new_chan_id,
         ));
 
-        let (todo, _stale) = take_schedule_batch(
-            ScheduleReason::FlushFollowup,
-            &mut state,
-            &mut queue,
-            1,
-        );
+        let (todo, _stale) =
+            take_schedule_batch(ScheduleReason::FlushFollowup, &mut state, &mut queue, 1);
         assert_eq!(todo, vec![new_chan_id]);
         assert!(queue.is_empty());
     }
