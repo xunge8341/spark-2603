@@ -20,6 +20,19 @@
 ### 2) 缺少 effective config 输出
 - `DataPlaneOptions -> DataPlaneConfig` 有 normalize，但缺少稳定的 `describe_effective()` / `dump_effective()`。
 
+## 最新进展（BigStep-30A.2）
+
+- `spark-transport` 增加稳定结构化快照：`DataPlaneConfig::describe_effective()` 与
+  `DataPlaneOptions::describe_effective()`，覆盖 bind/backlog/budget、watermark、flush policy、
+  hard cap、framing 与 HTTP limits（当 framing 为 Http1 时）。
+- `spark-host` 增加：
+  - `MgmtTransportProfileV1::describe_effective_config()`（profile 级别有效值）；
+  - `ServerConfig::describe_effective_config()`（同时给出 default 与 perf overlay 生效后的 transport 快照）。
+- perf overlay 覆盖边界被显式冻结为结构化 contract：
+  `DataPlaneConfig::perf_overlay_boundary()`。
+  - 允许覆盖：`watermark`、`flush_policy`、`budget`、`emit_evidence_log`；
+  - 绝不覆盖：`bind`、`max_accept_per_tick(backlog)`、`max_channels`、`framing`、`drain_timeout`、`max_pending_write_bytes`。
+
 ## 落地路线（尽量低风险，先做不改变 dataplane 语义的整理）
 
 ### 阶段 A：ServerConfig 收敛为 profile 驱动

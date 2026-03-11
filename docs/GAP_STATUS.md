@@ -54,7 +54,14 @@ It is intentionally short and **trunk-focused**（将军赶路不打小鬼）.
 ### Gap 3 — ASP.NET Core experience: effective config explainability remains
 **Now:** `ServerConfig` 已收口为 `mgmt: MgmtTransportProfileV1`，管理面不再双轨保存。
 **North Star:** Options/Profile is the only user-facing source of truth; effective config is explainable and auditable.
-**Next action:** add `describe_effective_config()` for runtime audit, and freeze default sets.
+**Status update (BigStep-30A.2):**
+- 已落地结构化 effective config：
+  - `DataPlaneConfig::describe_effective()` / `DataPlaneOptions::describe_effective()`;
+  - `MgmtTransportProfileV1::describe_effective_config()`;
+  - `ServerConfig::describe_effective_config()`（含 default 与 perf overlay 生效值）。
+- 已冻结 perf overlay 覆盖边界：`DataPlaneConfig::perf_overlay_boundary()`。
+
+**Next action:** 将上述结构化快照接入启动日志与 healthz 可选输出开关（仅展示层，非新配置源）。
 
 ### Gap 4 — Multi-backend parity (largest platform gap)
 **Now:** mio is primary; IOCP has runnable posted-packet closure, but true socket overlapped submission is pending.

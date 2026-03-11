@@ -587,3 +587,14 @@
   若未在 install 时建立一次初始 register，则 edge-triggered InterestSync 可能观察到 `prev == desired == empty` 而跳过 register，
   从而违反“draining/close 下 interest 必须可观测更新”的契约。
 - 修正：`install_channel()` 在完成 slot 安装后立即调用 `sync_interest(chan_id)`（并更新 InterestSlotState），保证该 generation 至少一次 register。
+
+## Iteration 30A.2（BigStep-30A.2）：effective config 结构化输出（2026-03-10）
+
+### 决策
+- 为 transport/host/mgmt 增加稳定的结构化 effective config snapshot API，避免在多个模块中手工拼接字符串。
+- 明确 perf overlay contract 边界，并冻结为结构化描述 `DataPlaneConfig::perf_overlay_boundary()`。
+
+### 依据
+- effective config 需要可序列化、可比对、可审计；debug 文本不应作为正式 contract。
+- profile/options 仍是唯一配置来源；effective snapshot 仅用于观测解释，不引入第二套配置输入。
+- perf overlay 必须“可解释且可验证”：只调优预算类字段，不改 bind/framing/容量/超时等形状字段。

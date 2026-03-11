@@ -110,6 +110,17 @@ pub struct MgmtTransportProfileV1 {
     pub emit_evidence_log: bool,
 }
 
+/// Stable, runtime-auditable mgmt profile effective snapshot.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct MgmtProfileEffectiveConfig {
+    pub bind: SocketAddr,
+    pub shutdown_timeout: Duration,
+    pub http: MgmtHttpLimits,
+    pub effective_max_request_bytes: usize,
+    pub isolation: MgmtIsolationOptions,
+    pub emit_evidence_log: bool,
+}
+
 impl MgmtTransportProfileV1 {
     #[inline]
     pub fn normalized(mut self) -> Self {
@@ -142,6 +153,20 @@ impl MgmtTransportProfileV1 {
     #[inline]
     pub fn transport_config(&self) -> DataPlaneConfig {
         self.transport_options().build()
+    }
+
+    /// Build a stable, runtime-auditable mgmt profile effective snapshot.
+    #[inline]
+    pub fn describe_effective_config(&self) -> MgmtProfileEffectiveConfig {
+        let normalized = self.clone().normalized();
+        MgmtProfileEffectiveConfig {
+            bind: normalized.bind,
+            shutdown_timeout: normalized.shutdown_timeout,
+            http: normalized.http,
+            effective_max_request_bytes: normalized.http.effective_max_request_bytes(),
+            isolation: normalized.isolation,
+            emit_evidence_log: normalized.emit_evidence_log,
+        }
     }
 
     /// Build a throughput-oriented management transport profile.
@@ -222,10 +247,52 @@ mod tests {
                 max_headers,
             } => {
                 assert_eq!(max_request_bytes, p.http.effective_max_request_bytes());
-                assert_eq!(max_head_bytes, p.http.max_head_bytes.min(p.http.effective_max_request_bytes()));
+                assert_eq!(
+                    max_head_bytes,
+                    p.http
+                        .max_head_bytes
+                        .min(p.http.effective_max_request_bytes())
+                );
                 assert_eq!(max_headers, p.http.max_headers.max(1));
             }
             other => panic!("expected Http1 framing, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn mgmt_profile_describe_effective_config_is_normalized() {
+        let p = MgmtTransportProfileV1 {
+            bind: "127.0.0.1:0".parse().expect("addr"),
+            shutdown_timeout: Duration::ZERO,
+            http: MgmtHttpLimits {
+                max_head_bytes: 0,
+                max_headers: 0,
+                max_body_bytes: 1024,
+                max_request_bytes: 0,
+            },
+            isolation: MgmtIsolationOptions {
+                max_inflight: 0,
+                limits: DataPlaneLimits {
+                    max_channels: 0,
+                    max_accept_per_tick: 0,
+                },
+                budget: Budget {
+                    max_events: 5,
+                    max_nanos: 6,
+                },
+            },
+            emit_evidence_log: true,
+        };
+
+        let effective = p.describe_effective_config();
+        assert_eq!(effective.shutdown_timeout, Duration::from_millis(1));
+        assert_eq!(effective.http.max_head_bytes, 1);
+        assert_eq!(effective.http.max_headers, 1);
+        assert_eq!(effective.http.max_request_bytes, 1);
+        assert_eq!(effective.effective_max_request_bytes, 1025);
+        assert_eq!(effective.isolation.max_inflight, 1);
+        assert_eq!(effective.isolation.limits.max_channels, 1);
+        assert_eq!(effective.isolation.limits.max_accept_per_tick, 1);
+        assert!(effective.emit_evidence_log);
     }
 }
