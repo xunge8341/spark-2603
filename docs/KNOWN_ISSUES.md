@@ -53,5 +53,6 @@
   - drain 语义已闭环，但长尾请求的停止粒度仍受超时配置精度限制。
 - 当前策略：
   - 拒绝新请求 + 在途请求 deadline 收敛，保证可预期上界。
+  - transport-backed 生命周期状态已补齐退出回落（`listener_ready/accepting_new_requests/overloaded`），本 KI 仅剩“细粒度 cancel 语义”缺口。
 - 后续方向：
   - 若需要更强确定性，可在后续迭代引入分阶段 cancel token（不在本轮范围）。
