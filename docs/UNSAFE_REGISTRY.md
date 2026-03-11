@@ -2,6 +2,8 @@
 
 本台账覆盖 `rg -n '(^|[^[:alnum:]_])unsafe[[:space:]]*(\{|fn)' crates -g '*.rs'` 的全部命中。
 
+本文件是 unsafe 文件清单的单一事实源（single source of truth）；`scripts/unsafe_audit.sh` 与 `scripts/unsafe_audit.ps1` 必须与本台账双向一致。
+
 ## crates/spark-transport/src/lease.rs
 
 - **行为目的**：把后端 `RxToken -> (ptr,len)` 的短期借用转成可控的 `RxLease`，并在 drop 时结构化释放 token。

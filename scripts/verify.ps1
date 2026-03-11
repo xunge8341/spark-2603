@@ -54,6 +54,10 @@ $RunBenchGate = -not [string]::IsNullOrWhiteSpace($RunBenchGate) -and @("1", "tr
 $RunCompletionGate = [Environment]::GetEnvironmentVariable("SPARK_VERIFY_COMPLETION_GATE")
 $RunCompletionGate = -not [string]::IsNullOrWhiteSpace($RunCompletionGate) -and @("1", "true", "yes", "on") -contains $RunCompletionGate.ToLowerInvariant()
 
+Write-Host "[status] Linux dataplane baseline: spark-transport + mio" -ForegroundColor DarkGray
+Write-Host "[status] Windows IOCP phase-0 compatibility layer: wrapper mode default; native completion opt-in" -ForegroundColor DarkGray
+Write-Host "[known-gap] write_pressure_smoke: Windows forward-progress stall (tracked, expected known-failing)" -ForegroundColor Yellow
+
 Invoke-Step "[1/8] cargo fmt" {
   # Use rustfmt's check mode; fail on diffs.
   cargo fmt --all -- --check
@@ -253,7 +257,7 @@ if ($downcastHits) {
 }
 
 
-Invoke-Step "[5b/8] unsafe audit (documented + confined)" {
+Invoke-Step "[5b/8] unsafe audit (documented + registry-synced)" {
   & .\scripts\unsafe_audit.ps1
 }
 

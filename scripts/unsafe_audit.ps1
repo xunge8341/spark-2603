@@ -2,17 +2,28 @@
 Unsafe audit (Windows / PowerShell).
 
 Policy:
-1) In core spark-transport, unsafe must be confined to a small, auditable set of modules.
-2) Every unsafe block/item must have a nearby `// SAFETY:` or `// Safety:` comment.
-3) Leaf backends (e.g., IOCP) may use unsafe, but must still be documented.
+1) Every `unsafe` in `crates/**/*.rs` must carry a nearby `// SAFETY:` comment.
+2) `docs/UNSAFE_REGISTRY.md` is the single source of truth for unsafe file inventory.
+3) Audit must fail on both missing registry entries and stale registry entries.
+
+Self-check idea (negative case):
+- Temporarily add an `unsafe { ... }` in any Rust file without `// SAFETY:` above it.
+- Run `./scripts/unsafe_audit.ps1` and confirm it fails with `UNDOCUMENTED UNSAFE`.
+- Revert the temporary change after validation.
 #>
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
 
+$registry = "docs\\UNSAFE_REGISTRY.md"
+if (-not (Test-Path $registry)) {
+  throw "missing $registry"
+}
+
 function Assert-UnsafeDocumented {
   param(
-    [Parameter(Mandatory=$true)][string]$Path
+    [Parameter(Mandatory=$true)][string]$Path,
+    [Parameter(Mandatory=$true)][string]$RelativePath
   )
 
   $lines = Get-Content -LiteralPath $Path
@@ -30,66 +41,52 @@ function Assert-UnsafeDocumented {
     if ($line -match '(^|[^0-9A-Za-z_])unsafe\s*(\{|fn)') {
       $ok = $false
       foreach ($prev in $ring) {
-        if ($prev -match '//\s*(SAFETY|Safety):') {
+        if ($prev -match '//\s*SAFETY:') {
           $ok = $true
           break
         }
       }
 
       if (-not $ok) {
-        $rel = Resolve-Path -Relative $Path
-        throw ("UNDOCUMENTED UNSAFE: {0}:{1}: {2}" -f $rel, ($i + 1), $line.Trim())
+        throw ("UNDOCUMENTED UNSAFE: {0}:{1}: {2}" -f $RelativePath, ($i + 1), $line.Trim())
       }
     }
   }
 }
 
-# 1) Confinement: spark-transport unsafe is allowed only in these modules.
-$allow = @(
-  "crates\spark-transport\src\lease.rs",
-  "crates\spark-transport\src\reactor\event_buf.rs"
-)
-
 $unsafePat = [regex]'(^|[^0-9A-Za-z_])unsafe\s*(\{|fn)'
-$transportSrc = Get-ChildItem -Path "crates\spark-transport\src" -Recurse -Filter "*.rs" | ForEach-Object { $_.FullName }
+$unsafeFiles = New-Object System.Collections.Generic.HashSet[string]
 
-$hits = New-Object System.Collections.Generic.List[object]
-foreach ($p in $transportSrc) {
-  $m = Select-String -Path $p -Pattern $unsafePat -AllMatches -ErrorAction SilentlyContinue
-  if ($m) {
-    $m | ForEach-Object { $hits.Add([pscustomobject]@{ Path = $_.Path; Line = $_.LineNumber; Snippet = $_.Line.Trim() }) | Out-Null }
+Get-ChildItem -Path "crates" -Recurse -Filter "*.rs" | ForEach-Object {
+  $path = $_.FullName
+  $rel = [System.IO.Path]::GetRelativePath((Get-Location).Path, $path).Replace('\\', '/')
+  $matches = Select-String -Path $path -Pattern $unsafePat -AllMatches -ErrorAction SilentlyContinue
+  if ($matches) {
+    $null = $unsafeFiles.Add($rel)
+    Assert-UnsafeDocumented -Path $path -RelativePath $rel
   }
 }
 
-if ($hits.Count -gt 0) {
-  $bad = $hits | Where-Object {
-    $ok = $false
-    foreach ($a in $allow) {
-      if ($_.Path -like ("*" + $a.Replace("/", "\"))) { $ok = $true; break }
-    }
-    -not $ok
-  }
-
-  if ($bad) {
-    $bad | Select-Object -First 200 | ForEach-Object {
-      Write-Host ("UNSAFE FORBIDDEN: {0}:{1}: {2}" -f $_.Path, $_.Line, $_.Snippet) -ForegroundColor Red
-    }
-    throw "unsafe must be confined to lease.rs and reactor/event_buf.rs (auditable modules)"
+$registryFiles = New-Object System.Collections.Generic.HashSet[string]
+Get-Content -LiteralPath $registry | ForEach-Object {
+  if ($_ -match '^##\s+(crates/.+)$') {
+    $null = $registryFiles.Add($Matches[1].Trim())
   }
 }
 
-# 2) Documentation: enforce SAFETY comments.
-foreach ($p in $allow) {
-  if (Test-Path $p) {
-    Assert-UnsafeDocumented -Path $p
+foreach ($f in $unsafeFiles) {
+  if (-not $registryFiles.Contains($f)) {
+    throw "unsafe registry missing file entry: $f"
   }
 }
 
-# 3) Leaf IOCP backend: allow unsafe but require documentation.
-if (Test-Path "crates\spark-transport-iocp\src") {
-  Get-ChildItem -Path "crates\spark-transport-iocp\src" -Recurse -Filter "*.rs" | ForEach-Object {
-    Assert-UnsafeDocumented -Path $_.FullName
+foreach ($f in $registryFiles) {
+  if (-not (Test-Path $f)) {
+    throw "unsafe registry references missing file: $f"
+  }
+  if (-not $unsafeFiles.Contains($f)) {
+    throw "unsafe registry stale entry (no unsafe in file): $f"
   }
 }
 
-Write-Host "OK: unsafe audit passed (confined + documented)." -ForegroundColor Green
+Write-Host "OK: unsafe audit passed (documented + registry-synced)." -ForegroundColor Green

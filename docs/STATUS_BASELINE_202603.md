@@ -22,19 +22,26 @@
 | R-003 | perf/bench 回归仅在显式开启时发现 | P1 | `SPARK_VERIFY_PERF_GATE` / `SPARK_VERIFY_BENCH_GATE` 控制 |
 | R-004 | unsafe 边界与脚本白名单漂移 | P0 | 已通过本轮修正，脚本与源码位置对齐 |
 
-## 3) unsafe 扫描与治理脚本差异（本轮对齐结果）
+## 3) unsafe 扫描与治理脚本状态（当前）
 
-### 扫描结果（主干 crate）
-- `spark-transport`：
-  - `src/lease.rs`
-  - `src/reactor/event_buf.rs`
-  - `src/async_bridge/channel_state.rs`
-- `spark-transport-iocp`：`src/native_completion.rs`（leaf backend）
-- 其他主干 crate 仍以无 `unsafe` 或测试内 `unsafe` 为主。
+### 当前真实状态
+- `crates/spark-transport/src/async_bridge/channel_state.rs` 已移除 `unsafe`。
+- `docs/UNSAFE_REGISTRY.md` 是 unsafe 台账的单一事实源（single source of truth）。
+- `scripts/unsafe_audit.sh` 与 `scripts/unsafe_audit.ps1` 均为 registry-synced：
+  - 扫描 `crates/**/*.rs` 的 `unsafe` 命中；
+  - 强制 `unsafe` 前具备 `// SAFETY:` 注释；
+  - 校验 registry 缺失条目与失效条目。
 
-### 差异
-- 变更前：`scripts/unsafe_audit.sh` 仅允许 `lease.rs` 与 `reactor/event_buf.rs`，与源码新增的 `channel_state.rs` 不一致。
-- 变更后：允许清单已补齐 `channel_state.rs`，并继续强制 `SAFETY` 注释。
+### 当前含 unsafe 的文件类别
+- transport 主干：`crates/spark-transport/src/lease.rs`、`crates/spark-transport/src/reactor/event_buf.rs`
+- iocp native-completion：`crates/spark-transport-iocp/src/native_completion.rs`
+- contract tests / helper tests：
+  - `crates/spark-transport-contract/tests/framing_roundtrip.rs`
+  - `crates/spark-transport-contract/tests/framing_roundtrip_fuzz.rs`
+  - `crates/spark-transport-contract/tests/rx_lease_observability.rs`
+  - `crates/spark-transport-iocp/tests/native_completion_smoke.rs`
+  - `crates/spark-buffer/src/bytes.rs`（测试模块内）
+- `spark-buffer/src/scan.rs`
 
 ## 4) verify gate 阻断策略（当前）
 
