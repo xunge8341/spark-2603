@@ -52,7 +52,11 @@ impl core::fmt::Debug for Bytes {
 impl Bytes {
     #[inline]
     pub fn from_static(s: &'static [u8]) -> Self {
-        Self { inner: BytesInner::Static(s), off: 0, len: s.len() }
+        Self {
+            inner: BytesInner::Static(s),
+            off: 0,
+            len: s.len(),
+        }
     }
 
     /// Return an empty buffer.
@@ -140,7 +144,11 @@ impl From<Vec<u8>> for Bytes {
     fn from(v: Vec<u8>) -> Self {
         let len = v.len();
         let arc = Arc::new(v);
-        Self { inner: BytesInner::SharedVec(arc), off: 0, len }
+        Self {
+            inner: BytesInner::SharedVec(arc),
+            off: 0,
+            len,
+        }
     }
 }
 
@@ -187,6 +195,7 @@ mod tests {
         let b = Bytes::from(v);
         let s = b.slice(3, 4);
         assert_eq!(s.as_slice(), b"3456");
+        // SAFETY: `p` points to the original vector allocation and offset 3 stays in-bounds for `b"0123456789"`.
         unsafe {
             assert_eq!(s.as_slice().as_ptr(), p.add(3));
         }

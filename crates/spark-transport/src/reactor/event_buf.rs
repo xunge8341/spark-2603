@@ -4,7 +4,7 @@ use super::KernelEvent;
 
 /// Read-only view over a `MaybeUninit<KernelEvent>` buffer.
 ///
-/// # Safety model
+/// # SAFETY model
 ///
 /// `Reactor::poll_into` writes a contiguous prefix of initialized events into an
 /// `out: &mut [MaybeUninit<KernelEvent>]` buffer and returns `n`.
@@ -16,10 +16,13 @@ use super::KernelEvent;
 /// # Tests
 ///
 /// - `tests::iter_init_reads_exact_prefix` ensures we only read the initialized prefix.
-pub(crate) fn iter_init<'a>(buf: &'a [MaybeUninit<KernelEvent>], n: usize) -> impl Iterator<Item = KernelEvent> + 'a {
+pub(crate) fn iter_init<'a>(
+    buf: &'a [MaybeUninit<KernelEvent>],
+    n: usize,
+) -> impl Iterator<Item = KernelEvent> + 'a {
     let n = n.min(buf.len());
     buf.iter().take(n).map(|slot| {
-        // Safety:
+        // SAFETY:
         // - by `Reactor::poll_into` contract, the first `n` entries are initialized;
         // - `KernelEvent: Copy`, so `assume_init_read` is a by-value read.
         unsafe { slot.assume_init_read() }

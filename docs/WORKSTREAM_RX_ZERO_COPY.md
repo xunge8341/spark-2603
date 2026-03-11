@@ -85,3 +85,13 @@
 - stream slice fast-path：`pipeline/channel_pipeline.rs::fire_channel_read_raw_stream_slice`
 - cumulation：`crates/spark-buffer/src/cumulation.rs`
 - inbound decode：`crates/spark-transport/src/async_bridge/inbound_state.rs`
+
+## 2026-03-11 收敛决策（Safety-first）
+
+- 在 T1 unsafe 治理阶段，`channel_state` 的 stream token borrowed path 被主动下线，统一 materialize。
+- 原因：该 borrowed path 依赖裸指针切片 + 手写释放守卫，`unsafe` 证明成本高于当前收益，不符合“先消除能消除的 unsafe”策略。
+- 影响：
+  - `rx_lease_tokens_total / rx_lease_borrowed_bytes_total` 在当前实现中保持为 0；
+  - `rx_materialize_bytes_total` 成为 token 路径主指标；
+  - decode/dispatch 语义不变，release 仍由 RAII guard 结构化保证。
+- 后续若要恢复 borrowed 路径，前置条件是：给出可审计不变量证明、回归测试（release 次数、边界切片、错误路径）和成本收益证据。

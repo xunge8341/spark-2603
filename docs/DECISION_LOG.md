@@ -598,3 +598,17 @@
 - effective config 需要可序列化、可比对、可审计；debug 文本不应作为正式 contract。
 - profile/options 仍是唯一配置来源；effective snapshot 仅用于观测解释，不引入第二套配置输入。
 - perf overlay 必须“可解释且可验证”：只调优预算类字段，不改 bind/framing/容量/超时等形状字段。
+
+## Iteration T1（2026-03-11）：unsafe 治理收敛，移除 channel_state borrowed unsafe
+
+### 决策
+- `crates/spark-transport/src/async_bridge/channel_state.rs` 不再保留 stream token borrowed fast-path，统一使用 `materialize_rx_token` owned 路径。
+- `unsafe` 台账新增 `docs/UNSAFE_REGISTRY.md`，并由 `scripts/unsafe_audit.sh` 强制与 `crates/` 代码同步。
+
+### 依据
+- borrowed fast-path 的 `from_raw_parts + raw ptr release` 需要额外生命周期证明，当前阶段收益不足以覆盖治理成本。
+- 安全策略优先级：先消除可消除 unsafe；必须保留的 unsafe 才允许留在最小边界并补足注释与测试。
+
+### 不变项
+- 不改变 driver kernel contract：`install_channel() -> sync_interest(chan_id)` 基线保持不变。
+- 不改变 decode / close / ordering 既有语义，仅改变实现策略（由借用改为 materialize）。
