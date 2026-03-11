@@ -4,6 +4,11 @@
 //! - 只负责“装配与配置”：`HostBuilder -> HostSpec`。
 //! - **不绑定运行时**：Host 本身不负责 listen/accept/驱动事件循环。
 //! - 运行（run）由上层应用或 server 发行物（如 `spark-ember`）完成。
+//!
+//! 稳定入口（host-level extension surface）：
+//! - `HostBuilder`：宿主装配入口。
+//! - `ServerConfig`：宿主配置入口。
+//! - `MgmtGroup` / `EndpointBuilder`：管理面路由与 timeout 覆盖入口。
 
 pub mod builder;
 pub mod config;
@@ -13,6 +18,7 @@ pub mod router;
 
 pub use builder::{HostBuilder, HostSpec, NoPipeline};
 pub use config::ServerConfig;
+pub use router::{EndpointBuilder, MgmtGroup};
 pub use mgmt_profile::{
     MgmtConnectionTimeouts, MgmtHttpLimits, MgmtIsolationOptions, MgmtOverloadOptions,
     MgmtRejectPolicy, MgmtRequestTimeouts, MgmtTransportProfileV1,
