@@ -61,6 +61,7 @@ This document is the trunk baseline. It must match code and verification scripts
 ## Update T5（主干并发与过载治理）
 - `AppServiceHandler` 从“单 inflight + 无上界 queue”升级为可配置模型：`max_inflight_per_connection` + `max_queue_per_connection` + `overload_action`（FailFast / Backpressure / CloseConnection）。
 - 默认值明确：`max_inflight_per_connection=1`、`max_queue_per_connection=1024`、`overload_action=FailFast`，确保不出现无限队列。
+- 数据面指标已闭环 overload 可观测：新增 `overload_reject_total` / `overload_backpressure_total` / `overload_close_total` 与 `app_queue_high_watermark`，并在 `/metrics` 导出。
 - 新增单测覆盖：队列上限、背压信号传播、拒绝关闭语义。
 
 ## Update T6（扩展点整理）

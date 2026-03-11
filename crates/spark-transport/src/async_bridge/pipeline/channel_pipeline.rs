@@ -18,7 +18,7 @@ use super::frame_decoder::StreamFrameDecoderHandler;
 use super::frame_encoder::StreamFrameEncoderHandler;
 use super::handler::ChannelHandler;
 use super::head::HeadHandler;
-use super::service_handler::{AppServiceHandler, AppServiceOptions};
+use super::service_handler::{AppOverloadStats, AppServiceHandler, AppServiceOptions};
 use super::tail::TailHandler;
 use super::FrameDecoderProfile;
 use super::HandlerVec;
@@ -332,6 +332,11 @@ where
         }
 
         None
+    }
+
+    #[inline]
+    pub fn take_app_overload_stats(&mut self) -> AppOverloadStats {
+        self.app.take_overload_stats()
     }
 
     pub fn has_app_backlog(&self) -> bool {

@@ -157,6 +157,11 @@ pub mod names {
         pub const INBOUND_FRAME_TOO_LARGE_TOTAL: &str = "inbound_frame_too_large_total";
         pub const FLUSH_LIMITED_TOTAL: &str = "flush_limited_total";
 
+        pub const OVERLOAD_REJECT_TOTAL: &str = "overload_reject_total";
+        pub const OVERLOAD_BACKPRESSURE_TOTAL: &str = "overload_backpressure_total";
+        pub const OVERLOAD_CLOSE_TOTAL: &str = "overload_close_total";
+        pub const APP_QUEUE_HIGH_WATERMARK: &str = "app_queue_high_watermark";
+
         pub const INBOUND_COALESCE_TOTAL: &str = "inbound_coalesce_total";
         pub const INBOUND_COPIED_BYTES_TOTAL: &str = "inbound_copied_bytes_total";
 
