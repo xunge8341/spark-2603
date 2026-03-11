@@ -5,6 +5,10 @@ use std::sync::Arc;
 pub trait MgmtState: Send + Sync {
     fn is_draining(&self) -> bool;
 
+    fn is_accepting_new_requests(&self) -> bool {
+        !self.is_draining()
+    }
+
     /// Request entering draining state (default no-op).
     fn request_draining(&self) {
         // Optional capability.
@@ -16,6 +20,10 @@ pub trait MgmtState: Send + Sync {
 
     fn dependencies_ready(&self) -> bool {
         true
+    }
+
+    fn is_overloaded(&self) -> bool {
+        false
     }
 }
 

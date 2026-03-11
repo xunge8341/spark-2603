@@ -130,12 +130,13 @@ impl TransportServer {
 
         let service = Arc::new(HttpMgmtService {
             routes: Arc::clone(&self.routes),
-            state: self.state() as Arc<dyn MgmtState>,
+            state: self.state(),
             max_request_bytes: self.profile.http.effective_max_request_bytes(),
             max_head_bytes: self.profile.http.max_head_bytes,
             max_headers: self.profile.http.max_headers,
             max_body_bytes: self.profile.http.max_body_bytes,
             default_request_timeout: self.profile.request_timeouts.default_timeout,
+            drain_timeout: self.profile.request_timeouts.default_timeout,
             max_inflight: self.profile.overload.max_concurrent_requests,
             queue_limit: self.profile.overload.queue_limit,
             max_inflight_per_connection: self.profile.overload.max_inflight_per_connection,
@@ -148,6 +149,9 @@ impl TransportServer {
         let metrics = Arc::clone(&self.metrics);
 
         let dp = spawn(cfg, draining, service, metrics)?;
+        self.state.set_listener_ready(true);
+        self.state.set_accepting_new_requests(true);
+
         Ok(TransportServerHandle {
             join: dp.join,
             addr: dp.local_addr,
@@ -158,12 +162,13 @@ impl TransportServer {
 
 pub struct HttpMgmtService {
     routes: Arc<RouteTable>,
-    state: Arc<dyn MgmtState>,
+    state: Arc<EmberState>,
     max_request_bytes: usize,
     max_head_bytes: usize,
     max_headers: usize,
     max_body_bytes: usize,
     default_request_timeout: std::time::Duration,
+    drain_timeout: std::time::Duration,
     max_inflight: usize,
     queue_limit: usize,
     max_inflight_per_connection: usize,
@@ -183,6 +188,7 @@ impl std::fmt::Debug for HttpMgmtService {
             .field("max_headers", &self.max_headers)
             .field("max_body_bytes", &self.max_body_bytes)
             .field("default_request_timeout", &self.default_request_timeout)
+            .field("drain_timeout", &self.drain_timeout)
             .field("max_inflight", &self.max_inflight)
             .field("queue_limit", &self.queue_limit)
             .field(
@@ -196,11 +202,13 @@ impl std::fmt::Debug for HttpMgmtService {
 
 struct InflightGuard<'a> {
     inflight: &'a AtomicUsize,
+    state: &'a EmberState,
 }
 
 impl Drop for InflightGuard<'_> {
     fn drop(&mut self) {
         self.inflight.fetch_sub(1, Ordering::Release);
+        self.state.dec_active_requests();
     }
 }
 
@@ -213,13 +221,10 @@ impl Service<Bytes> for HttpMgmtService {
         mut context: Context,
         request: Bytes,
     ) -> Result<Self::Response, Self::Error> {
-        if self.state.is_draining() {
-            return Ok(Some(resp_draining()));
-        }
-
         let queued_prev = self.queued.fetch_add(1, Ordering::AcqRel);
         if queued_prev >= self.queue_limit {
             self.queued.fetch_sub(1, Ordering::Release);
+            self.state.set_overloaded(true);
             return Ok(reject_overload(self.reject_policy));
         }
 
@@ -228,11 +233,15 @@ impl Service<Bytes> for HttpMgmtService {
         if prev >= self.max_inflight {
             self.inflight.fetch_sub(1, Ordering::Release);
             self.queued.fetch_sub(1, Ordering::Release);
+            self.state.set_overloaded(true);
             return Ok(reject_overload(self.reject_policy));
         }
         self.queued.fetch_sub(1, Ordering::Release);
+        self.state.set_overloaded(false);
+        self.state.inc_active_requests();
         let _guard = InflightGuard {
             inflight: &self.inflight,
+            state: self.state.as_ref(),
         };
 
         if request.len() > self.max_request_bytes {
@@ -266,15 +275,25 @@ impl Service<Bytes> for HttpMgmtService {
         let kind_ref = req.method.as_ref();
         let path_ref = req.path.as_ref();
 
+        if (self.state.is_draining() || !self.state.is_accepting_new_requests())
+            && path_ref != "/healthz"
+        {
+            return Ok(Some(resp_draining()));
+        }
+
         let resp = if let Some(entry) = self.routes.lookup(kind_ref, path_ref) {
             let timeout = entry.effective_request_timeout(self.default_request_timeout);
-            let deadline = Instant::now() + timeout;
+            let deadline = if self.state.is_draining() {
+                Instant::now() + timeout.min(self.drain_timeout)
+            } else {
+                Instant::now() + timeout
+            };
             match block_on_until(
                 (entry.handler)(MgmtRequest {
                     kind: RouteKind::from(kind_ref),
                     path: req.path,
                     body: body.to_vec(),
-                    state: Arc::clone(&self.state),
+                    state: Arc::clone(&self.state) as Arc<dyn spark_host::router::MgmtState>,
                 }),
                 deadline,
             ) {
@@ -375,6 +394,7 @@ mod tests {
             max_headers: 32,
             max_body_bytes: 8 * 1024,
             default_request_timeout,
+            drain_timeout: default_request_timeout,
             max_inflight,
             queue_limit,
             max_inflight_per_connection: 1,
@@ -462,7 +482,14 @@ mod tests {
             MgmtRejectPolicy::ServiceUnavailable,
         );
 
-        let out = block_on(svc.call(Context::default(), make_get("/healthz")));
+        let health = block_on(svc.call(Context::default(), make_get("/healthz")));
+        let health_bytes = health
+            .ok()
+            .flatten()
+            .unwrap_or_else(|| Bytes::from_static(b""));
+        assert_eq!(resp_status(&health_bytes), Some(200));
+
+        let out = block_on(svc.call(Context::default(), make_get("/readyz")));
         let bytes = out
             .ok()
             .flatten()

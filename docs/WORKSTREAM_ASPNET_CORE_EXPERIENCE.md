@@ -124,3 +124,9 @@ where
     }
 }
 ```
+
+## 最新进展（T3 深水区：drain/readiness 生命周期闭环）
+- `EmberState` 扩展为轻量多信号模型：`accepting_new_requests`、`active_requests`、`overloaded`，并与 `draining/listener_ready/dependencies_ready` 联动。
+- std server 与 transport server 都在请求进入/退出时维护 `active_requests`，在过载拒绝时更新 `overloaded`，并在 drain 后停止受理新请求。
+- `/readyz` 语义收敛为“可接流量”判定（draining/listener/dependency/accepting/overload）；`/healthz` 继续只表达存活（drain 中保持 200）。
+- in-flight 收敛边界明确：按 route/default request timeout deadline 收敛，不引入依赖探针框架。

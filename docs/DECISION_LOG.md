@@ -659,3 +659,15 @@
   - `overload_action`（`FailFast | Backpressure | CloseConnection`）
 - 维持 driver contract baseline 不变：不修改 `install_channel() -> sync_interest(chan_id)`。
 - 扩展策略：仅开放必要 hook（builder/config 覆盖入口），不引入额外 middleware 生态层与多层抽象。
+
+
+## Iteration 21（T3 深水区）：Mgmt drain/readiness 语义闭环（2026-03-11）
+
+### 决策
+- 管理面状态以轻量原子量闭环：`draining + accepting_new_requests + listener_ready + dependencies_ready + overloaded + active_requests`。
+- `/healthz` 固定表达“进程存活”；`/readyz` 仅表达“是否可接收业务流量”；`/drain` 触发后拒绝新请求并等待在途请求按 timeout 收敛。
+
+### 依据
+- 仅有 `draining` 布尔不足以表达生产就绪语义，至少需要 listener/dependency/accepting/overload 联动。
+- 本轮目标是生命周期闭环而非框架化探针：保持状态模型简单、可审计、低耦合。
+- 在途收敛采用既有 request timeout 作为上界，能在不扩散跨层生命周期复杂度的前提下提供可验证行为。

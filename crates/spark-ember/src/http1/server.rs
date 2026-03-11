@@ -8,7 +8,7 @@ use spark_host::router::{MgmtRequest, MgmtResponse, MgmtState, RouteKind, RouteT
 
 use std::io::Read;
 use std::net::{Shutdown, TcpListener, TcpStream};
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::thread;
 use std::time::Instant;
@@ -19,6 +19,7 @@ pub struct Server {
     state: Arc<EmberState>,
     inflight: Arc<AtomicUsize>,
     queued: Arc<AtomicUsize>,
+    overloaded: Arc<AtomicBool>,
 }
 
 impl Server {
@@ -29,6 +30,7 @@ impl Server {
             state,
             inflight: Arc::new(AtomicUsize::new(0)),
             queued: Arc::new(AtomicUsize::new(0)),
+            overloaded: Arc::new(AtomicBool::new(false)),
         }
     }
 
@@ -48,8 +50,10 @@ impl Server {
         let routes = Arc::clone(&self.routes);
         let state = self.state();
         state.set_listener_ready(true);
+        state.set_accepting_new_requests(true);
         let inflight = Arc::clone(&self.inflight);
         let queued = Arc::clone(&self.queued);
+        let overloaded = Arc::clone(&self.overloaded);
 
         let max_req = self.config.effective_max_request_bytes();
         let max_head = self.config.mgmt.http.max_head_bytes;
@@ -60,19 +64,26 @@ impl Server {
 
         loop {
             if state.is_draining() {
+                state.set_accepting_new_requests(false);
                 break;
             }
 
             match listener.accept() {
                 Ok((mut stream, _addr)) => {
                     if should_reject(&inflight, &queued, max_inflight, queue_limit) {
+                        overloaded.store(true, Ordering::Release);
+                        state.set_overloaded(true);
                         reject_overload(&self.config, &mut stream);
                         let _ = stream.shutdown(Shutdown::Both);
                         continue;
                     }
 
+                    overloaded.store(false, Ordering::Release);
+                    state.set_overloaded(false);
+
                     queued.fetch_add(1, Ordering::AcqRel);
                     inflight.fetch_add(1, Ordering::AcqRel);
+                    state.inc_active_requests();
                     let routes = Arc::clone(&routes);
                     let state = Arc::clone(&state);
                     let inflight = Arc::clone(&inflight);
@@ -80,7 +91,10 @@ impl Server {
                     let cfg = self.config.clone();
                     thread::spawn(move || {
                         queued.fetch_sub(1, Ordering::Release);
-                        let _guard = InflightGuard { inflight };
+                        let _guard = InflightGuard {
+                            inflight,
+                            state: Arc::clone(&state),
+                        };
                         let _ = handle_conn(
                             stream,
                             routes,
@@ -102,7 +116,14 @@ impl Server {
             }
         }
 
+        state.set_accepting_new_requests(false);
         state.set_listener_ready(false);
+
+        let drain_deadline = Instant::now() + self.config.mgmt.request_timeouts.default_timeout;
+        while self.inflight.load(Ordering::Acquire) > 0 && Instant::now() < drain_deadline {
+            thread::sleep(std::time::Duration::from_millis(10));
+        }
+
         Ok(())
     }
 
@@ -156,11 +177,13 @@ fn reject_overload(cfg: &ServerConfig, stream: &mut TcpStream) {
 
 struct InflightGuard {
     inflight: Arc<AtomicUsize>,
+    state: Arc<EmberState>,
 }
 
 impl Drop for InflightGuard {
     fn drop(&mut self) {
         self.inflight.fetch_sub(1, Ordering::Release);
+        self.state.dec_active_requests();
     }
 }
 
@@ -315,6 +338,11 @@ fn handle_conn(
 
     let kind_ref = head.method.as_ref();
     let path_ref = head.path.as_ref();
+
+    if (!state.is_accepting_new_requests() || state.is_draining()) && path_ref != "/healthz" {
+        write_response(&mut stream, 503, "text/plain; charset=utf-8", b"Draining")?;
+        return Ok(());
+    }
     let resp = if let Some(entry) = routes.lookup(kind_ref, path_ref) {
         let timeout = entry
             .request_timeout

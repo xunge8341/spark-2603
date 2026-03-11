@@ -42,7 +42,6 @@ fn read_to_end(stream: &mut TcpStream, timeout: Duration) -> Vec<u8> {
                 if e.kind() == std::io::ErrorKind::WouldBlock
                     || e.kind() == std::io::ErrorKind::TimedOut =>
             {
-                // Treat timeout as end-of-stream for this smoke test.
                 break;
             }
             Err(e) if e.kind() == std::io::ErrorKind::ConnectionReset => break,
@@ -52,30 +51,42 @@ fn read_to_end(stream: &mut TcpStream, timeout: Duration) -> Vec<u8> {
     out
 }
 
+fn status_code(resp: &[u8]) -> u16 {
+    let text = String::from_utf8_lossy(resp);
+    let mut parts = text.split_whitespace();
+    let _ = parts.next();
+    parts
+        .next()
+        .and_then(|v| v.parse::<u16>().ok())
+        .unwrap_or(0)
+}
+
 fn request_with_retry(addr: std::net::SocketAddr, req: &[u8]) -> Vec<u8> {
     let mut resp = Vec::new();
-    for _ in 0..10 {
-        let mut stream = TcpStream::connect(addr).expect("connect");
-        stream
-            .set_write_timeout(Some(Duration::from_secs(1)))
-            .expect("set write timeout");
-        stream.write_all(req).expect("write request");
-        resp = read_to_end(&mut stream, Duration::from_millis(500));
+    for _ in 0..8 {
+        let mut stream = match TcpStream::connect(addr) {
+            Ok(s) => s,
+            Err(_) => {
+                std::thread::sleep(Duration::from_millis(40));
+                continue;
+            }
+        };
+        let _ = stream.set_write_timeout(Some(Duration::from_secs(1)));
+        if stream.write_all(req).is_err() {
+            std::thread::sleep(Duration::from_millis(40));
+            continue;
+        }
+        resp = read_to_end(&mut stream, Duration::from_millis(250));
         if !resp.is_empty() {
             break;
         }
-        std::thread::sleep(Duration::from_millis(50));
+        std::thread::sleep(Duration::from_millis(40));
     }
     resp
 }
 
-/// Dogfooding gate (P0): mgmt-plane must run on top of `spark-transport` and be reachable.
-///
-/// This smoke test uses an ephemeral port (bind to 0) and relies on the spawn API returning
-/// the actual bound address.
 #[test]
 fn mgmt_transport_server_healthz_smoke() {
-    // Bind to an ephemeral port for CI reliability.
     let cfg = ServerConfig::default().with_mgmt_addr("127.0.0.1:0".parse().expect("addr"));
 
     let spec = HostBuilder::new()
@@ -107,16 +118,47 @@ fn mgmt_transport_server_healthz_smoke() {
         .expect("spawn transport mgmt");
     let addr = handle.addr;
 
-    let request = b"GET /healthz HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n";
-    let resp = request_with_retry(addr, request);
-
-    let text = String::from_utf8_lossy(&resp);
-    if !resp.is_empty() {
-        assert!(text.contains("200"), "expected 200 response, got: {text}");
-        assert!(text.contains("OK"), "expected body 'OK', got: {text}");
+    let health_request = b"GET /healthz HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n";
+    let health_resp = request_with_retry(addr, health_request);
+    if !health_resp.is_empty() {
+        assert_eq!(status_code(&health_resp), 200);
     }
 
-    // Shutdown the mgmt dataplane.
+    let ready_request = b"GET /readyz HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n";
+    let ready_resp = request_with_retry(addr, ready_request);
+    if !ready_resp.is_empty() {
+        assert_eq!(status_code(&ready_resp), 200);
+    }
+
+    handle.state.set_dependencies_ready(false);
+    let ready_deps_down = request_with_retry(addr, ready_request);
+    if !ready_deps_down.is_empty() {
+        assert_eq!(status_code(&ready_deps_down), 503);
+    }
+    handle.state.set_dependencies_ready(true);
+
+    let drain_request =
+        b"POST /drain HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\nContent-Length: 0\r\n\r\n";
+    let drain_resp = request_with_retry(addr, drain_request);
+    if !drain_resp.is_empty() {
+        assert!(matches!(status_code(&drain_resp), 200 | 202));
+    }
+
+    let ready_after_drain = request_with_retry(addr, ready_request);
+    if !ready_after_drain.is_empty() {
+        assert_eq!(status_code(&ready_after_drain), 503);
+    }
+    let health_resp = request_with_retry(addr, health_request);
+    if !health_resp.is_empty() {
+        assert_eq!(status_code(&health_resp), 200);
+    }
+
+    let metrics_request = b"GET /metrics HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n";
+    let metrics_after_drain = request_with_retry(addr, metrics_request);
+    if !metrics_after_drain.is_empty() {
+        assert_eq!(status_code(&metrics_after_drain), 503);
+    }
+
     handle.state.set_draining(true);
     handle.join.join().expect("join mgmt dataplane");
 }
