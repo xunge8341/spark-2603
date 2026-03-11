@@ -11,6 +11,7 @@ use core::future::Future;
 use core::task::{Context, Poll, Waker};
 use std::sync::Arc;
 use std::task::Wake;
+use std::time::Instant;
 
 fn noop_waker() -> Waker {
     struct Noop;
@@ -36,6 +37,21 @@ pub fn block_on<F: Future>(fut: F) -> F::Output {
                 // 自旋：mgmt handler 理论上不应长期 Pending。
                 // 若发生，说明调用方需要引入真正的 runtime 集成层。
             }
+        }
+    }
+}
+
+pub fn block_on_until<F: Future>(fut: F, deadline: Instant) -> Option<F::Output> {
+    let waker = noop_waker();
+    let mut cx = Context::from_waker(&waker);
+    let mut fut = Box::pin(fut);
+    loop {
+        if Instant::now() >= deadline {
+            return None;
+        }
+        match fut.as_mut().poll(&mut cx) {
+            Poll::Ready(v) => return Some(v),
+            Poll::Pending => {}
         }
     }
 }

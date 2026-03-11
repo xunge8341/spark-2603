@@ -167,6 +167,41 @@ impl<S> HostBuilder<S> {
     /// 给不熟 Rust/OOP 的同学提示：
     /// - 这里不是“继承 Controller”，而是把 handler 作为函数值注册到路由表；
     /// - handler 的类型在编译期确定（零开销），RouteTable 只存一个 `Arc<dyn Fn>`。
+
+    pub fn map_get_with_timeout<F, Fut>(
+        self,
+        path: impl Into<Box<str>>,
+        route_id: impl Into<Box<str>>,
+        timeout: std::time::Duration,
+        handler: F,
+    ) -> Self
+    where
+        F: Fn(MgmtRequest) -> Fut + Send + Sync + 'static,
+        Fut: Future<Output = MgmtResponse> + Send + 'static,
+    {
+        let path = path.into();
+        let route_id: Box<str> = route_id.into();
+        let counter = self.route_metrics.register(route_id.clone());
+        let h = Arc::new(handler);
+
+        self.mgmt(|app| {
+            let counter = Arc::clone(&counter);
+            let h = Arc::clone(&h);
+            let wrapped = move |req: MgmtRequest| {
+                let g = counter.begin();
+                let start = Instant::now();
+                let h = Arc::clone(&h);
+                async move {
+                    let resp = (h)(req).await;
+                    g.finish(resp.status, start.elapsed());
+                    resp
+                }
+            };
+            app.map_get(path, wrapped)
+                .named(route_id)
+                .with_request_timeout(timeout);
+        })
+    }
     pub fn map_post<F, Fut>(
         self,
         path: impl Into<Box<str>>,
@@ -249,6 +284,12 @@ impl<S> HostBuilder<S> {
             if req.state.is_draining() {
                 return MgmtResponse::status(503, "Draining");
             }
+            if !req.state.is_listener_ready() {
+                return MgmtResponse::status(503, "Listener Not Ready");
+            }
+            if !req.state.dependencies_ready() {
+                return MgmtResponse::status(503, "Dependencies Not Ready");
+            }
             MgmtResponse::ok("Ready")
         });
 
@@ -311,6 +352,45 @@ mod tests {
     use crate::config::ServerConfig;
     use spark_transport::DataPlaneConfig;
 
+    use crate::router::{MgmtRequest, MgmtState};
+    use std::future::Future;
+    use std::sync::Arc;
+    use std::task::{Context, Poll, Wake, Waker};
+
+    fn block_on<F: Future>(fut: F) -> F::Output {
+        struct Noop;
+        impl Wake for Noop {
+            fn wake(self: Arc<Self>) {}
+            fn wake_by_ref(self: &Arc<Self>) {}
+        }
+        let waker = Waker::from(Arc::new(Noop));
+        let mut cx = Context::from_waker(&waker);
+        let mut fut = Box::pin(fut);
+        loop {
+            if let Poll::Ready(v) = fut.as_mut().poll(&mut cx) {
+                return v;
+            }
+        }
+    }
+
+    struct FakeState {
+        draining: bool,
+        listener_ready: bool,
+        deps_ready: bool,
+    }
+
+    impl MgmtState for FakeState {
+        fn is_draining(&self) -> bool {
+            self.draining
+        }
+        fn is_listener_ready(&self) -> bool {
+            self.listener_ready
+        }
+        fn dependencies_ready(&self) -> bool {
+            self.deps_ready
+        }
+    }
+
     #[test]
     fn transport_perf_profile_preserves_bind_and_applies_overlay() {
         let bind = "127.0.0.1:25070".parse().expect("static addr");
@@ -323,6 +403,32 @@ mod tests {
         assert_eq!(builder.dataplane.flush_policy.max_syscalls, 64);
         assert_eq!(builder.dataplane.watermark.low_mul, 8);
         assert_eq!(builder.dataplane.budget.max_events, 512);
+    }
+
+    #[test]
+    fn readyz_requires_listener_and_dependencies() {
+        let app = HostBuilder::<NoPipeline>::new()
+            .use_default_diagnostics()
+            .mgmt;
+        let ready = app
+            .routes()
+            .get("GET")
+            .and_then(|m| m.get("/readyz"))
+            .cloned()
+            .unwrap_or_else(|| panic!("missing /readyz"));
+
+        let req = MgmtRequest {
+            kind: "GET".into(),
+            path: "/readyz".into(),
+            body: Vec::new(),
+            state: Arc::new(FakeState {
+                draining: false,
+                listener_ready: true,
+                deps_ready: false,
+            }),
+        };
+        let resp = block_on((ready.handler)(req));
+        assert_eq!(resp.status, 503);
     }
 
     #[test]

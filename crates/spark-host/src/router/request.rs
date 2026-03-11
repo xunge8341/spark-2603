@@ -9,6 +9,14 @@ pub trait MgmtState: Send + Sync {
     fn request_draining(&self) {
         // Optional capability.
     }
+
+    fn is_listener_ready(&self) -> bool {
+        true
+    }
+
+    fn dependencies_ready(&self) -> bool {
+        true
+    }
 }
 
 #[derive(Clone)]

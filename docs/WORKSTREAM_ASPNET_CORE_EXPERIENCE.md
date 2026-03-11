@@ -67,3 +67,8 @@
 - Mgmt Profile：`crates/spark-host/src/mgmt_profile.rs` + `docs/MGMT_PROFILE_V1.md`
 - Options/Config：`crates/spark-transport/src/config.rs`（或相关模块）
 - Hosting & dogfooding：`crates/spark-ember` / `crates/spark-host`
+
+## 最新进展（T3）
+- `ServerConfig` 新增管理面 timeout/overload 配置入口，保持 profile 作为单一事实来源。
+- `HostBuilder` 默认诊断路由中，`/readyz` 不再只看 draining，而是组合 listener 与依赖健康。
+- 路由层新增 request timeout 元数据，可在 route 与 group 维度覆盖。

@@ -4,6 +4,7 @@ use std::borrow::Borrow;
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
+use std::time::Duration;
 
 /// Route kind discriminator.
 ///
@@ -77,6 +78,7 @@ pub type MgmtHandlerFn = dyn Fn(MgmtRequest) -> MgmtFuture + Send + Sync + 'stat
 pub struct RouteEntry {
     pub route_id: Box<str>,
     pub handler: Arc<MgmtHandlerFn>,
+    pub request_timeout: Option<Duration>,
 }
 
 impl std::fmt::Debug for RouteEntry {
@@ -84,6 +86,7 @@ impl std::fmt::Debug for RouteEntry {
         f.debug_struct("RouteEntry")
             .field("route_id", &self.route_id)
             .field("handler", &"<handler>")
+            .field("request_timeout", &self.request_timeout)
             .finish()
     }
 }

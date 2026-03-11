@@ -1,25 +1,36 @@
+use super::app::MgmtApp;
 use super::endpoint::EndpointBuilder;
 use super::request::MgmtRequest;
 use super::response::MgmtResponse;
 use super::types::{kinds, RouteKind};
-use super::app::MgmtApp;
 
 use std::future::Future;
+use std::time::Duration;
 
 /// A route group with a shared prefix.
 pub struct MgmtGroup<'a> {
     pub(crate) app: &'a mut MgmtApp,
     pub(crate) prefix: Box<str>,
+    pub(crate) default_request_timeout: Option<Duration>,
 }
 
 impl<'a> MgmtGroup<'a> {
+    pub fn with_request_timeout(&mut self, timeout: Duration) -> &mut Self {
+        self.default_request_timeout = Some(timeout);
+        self
+    }
+
     pub fn map_get<F, Fut>(&mut self, path: impl Into<Box<str>>, handler: F) -> EndpointBuilder<'_>
     where
         F: Fn(MgmtRequest) -> Fut + Send + Sync + 'static,
         Fut: Future<Output = MgmtResponse> + Send + 'static,
     {
         let p = join_paths(&self.prefix, &path.into());
-        self.app.map(kinds::GET, p, handler)
+        let ep = self.app.map(kinds::GET, p, handler);
+        if let Some(timeout) = self.default_request_timeout {
+            return ep.with_request_timeout(timeout);
+        }
+        ep
     }
 
     pub fn map_post<F, Fut>(&mut self, path: impl Into<Box<str>>, handler: F) -> EndpointBuilder<'_>
@@ -28,17 +39,30 @@ impl<'a> MgmtGroup<'a> {
         Fut: Future<Output = MgmtResponse> + Send + 'static,
     {
         let p = join_paths(&self.prefix, &path.into());
-        self.app.map(kinds::POST, p, handler)
+        let ep = self.app.map(kinds::POST, p, handler);
+        if let Some(timeout) = self.default_request_timeout {
+            return ep.with_request_timeout(timeout);
+        }
+        ep
     }
 
-    pub fn map_kind<K, F, Fut>(&mut self, kind: K, path: impl Into<Box<str>>, handler: F) -> EndpointBuilder<'_>
+    pub fn map_kind<K, F, Fut>(
+        &mut self,
+        kind: K,
+        path: impl Into<Box<str>>,
+        handler: F,
+    ) -> EndpointBuilder<'_>
     where
         K: Into<RouteKind>,
         F: Fn(MgmtRequest) -> Fut + Send + Sync + 'static,
         Fut: Future<Output = MgmtResponse> + Send + 'static,
     {
         let p = join_paths(&self.prefix, &path.into());
-        self.app.map(kind, p, handler)
+        let ep = self.app.map(kind, p, handler);
+        if let Some(timeout) = self.default_request_timeout {
+            return ep.with_request_timeout(timeout);
+        }
+        ep
     }
 }
 
