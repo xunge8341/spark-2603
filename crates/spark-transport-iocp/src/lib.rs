@@ -1,15 +1,15 @@
-//! `spark-transport-iocp`: Windows IOCP backend integration (dataplane).
+//! `spark-transport-iocp`: Windows IOCP compatibility-layer backend boundary (dataplane).
 //!
 //! # Why this crate exists
 //! - We need a **Windows-native** backend that can satisfy the same semantic contracts as the mio/epoll/kqueue family.
 //! - We also want a **stable leaf boundary** so future backend work does not leak into core semantics.
 //!
-//! # Phase-0 implementation strategy
+//! # Current classification (phase-0): compatibility layer
 //!
-//! DECISION (BigStep-11, multi-backend bring-up):
-//! - **Do not** change transport-core semantics to completion-style IO yet (that would be a risky cross-cutting refactor).
-//! - Instead, we provide an IOCP distribution path that is contract-compatible **today** by delegating to the existing
-//!   readiness engine on Windows.
+//! This crate is **not** a native dataplane yet.
+//! - It is a Windows compatibility layer that freezes the backend boundary and API shape.
+//! - The default dataplane delegates to the existing readiness engine on Windows.
+//! - Native overlapped socket dataplane remains phase-x and gated behind future milestones.
 //!
 //! Why this is still IOCP-relevant:
 //! - On Windows, mio's poller is backed by the platform IOCP-based mechanisms (e.g. `wepoll`).
@@ -58,7 +58,7 @@ pub struct TcpDataplaneHandle {
 
 // === Reactor surface ===
 
-/// Windows IOCP reactor (phase-0 wrapper).
+/// Windows IOCP reactor (phase-0 compatibility layer wrapper).
 ///
 /// DECISION: keep the *type name* stable (`IocpReactor`) so downstream code can depend on it,
 /// while the internals may evolve from readiness-wrapper to native IOCP completion.
@@ -84,7 +84,11 @@ impl Reactor for IocpReactor {
     }
 
     #[inline]
-    fn register(&mut self, chan_id: u32, interest: Interest) -> core::result::Result<(), spark_uci::KernelError> {
+    fn register(
+        &mut self,
+        chan_id: u32,
+        interest: Interest,
+    ) -> core::result::Result<(), spark_uci::KernelError> {
         self.inner.register(chan_id, interest)
     }
 }
@@ -96,11 +100,19 @@ pub struct IocpReactor;
 
 #[cfg(not(windows))]
 impl Reactor for IocpReactor {
-    fn poll_into(&mut self, _budget: Budget, _out: &mut [MaybeUninit<KernelEvent>]) -> Result<usize> {
+    fn poll_into(
+        &mut self,
+        _budget: Budget,
+        _out: &mut [MaybeUninit<KernelEvent>],
+    ) -> Result<usize> {
         Err(spark_uci::KernelError::Unsupported)
     }
 
-    fn register(&mut self, _chan_id: u32, _interest: Interest) -> core::result::Result<(), spark_uci::KernelError> {
+    fn register(
+        &mut self,
+        _chan_id: u32,
+        _interest: Interest,
+    ) -> core::result::Result<(), spark_uci::KernelError> {
         Err(spark_uci::KernelError::Unsupported)
     }
 }
@@ -122,9 +134,11 @@ pub fn try_spawn_tcp_dataplane<A>(
 where
     A: Service<Bytes, Response = Option<Bytes>, Error = KernelError> + Send + Sync + 'static,
 {
-    spark_transport_mio::try_spawn_tcp_dataplane(cfg, draining, app, metrics).map(|h| TcpDataplaneHandle {
-        join: h.join,
-        local_addr: h.local_addr,
+    spark_transport_mio::try_spawn_tcp_dataplane(cfg, draining, app, metrics).map(|h| {
+        TcpDataplaneHandle {
+            join: h.join,
+            local_addr: h.local_addr,
+        }
     })
 }
 

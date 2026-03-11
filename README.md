@@ -12,6 +12,16 @@
 
 ---
 
+
+## 当前工程状态快照（2026-03 / T2）
+
+- Linux dataplane：`spark-transport-mio` 为当前 production baseline。
+- Windows IOCP：`spark-transport-iocp` 当前为 **phase-0 compatibility layer**（wrapper），**not production-ready native dataplane**。
+- Windows `write_pressure_smoke`：已知前进性问题，作为 known-failing 项显式报告（不允许静默 ignore）。
+- 详见：`docs/GAP_STATUS.md`、`docs/KNOWN_ISSUES.md`、`docs/BACKEND_CONTRACT_MAP.md`。
+
+---
+
 # 1. 引言
 
 ## 1.1 编写目的

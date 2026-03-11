@@ -612,3 +612,15 @@
 ### 不变项
 - 不改变 driver kernel contract：`install_channel() -> sync_interest(chan_id)` 基线保持不变。
 - 不改变 decode / close / ordering 既有语义，仅改变实现策略（由借用改为 materialize）。
+
+## Iteration 14（T2 Windows/IOCP 状态诚实化 + 前进性门禁，2026-03-11）
+
+- 决策：
+  1) 统一将 `spark-transport-iocp` 对外口径标注为 **phase-0 compatibility layer**，明确不是 native dataplane、不是 production-ready；
+  2) Windows `write_pressure_smoke` 改为 **known-failing 可见门禁**：允许阶段性不阻断，但必须在 verify 输出中显式报告，不允许静默 ignore；
+  3) 为 Windows 后端补齐专项测试集（前进性、half-close、背压 drain、reactor 唤醒一致性），并要求非 Windows 环境显式 skip 且输出原因。
+
+- 依据：
+  - 多后端推进阶段最怕“名义支持”与“口径漂移”；先把状态诚实化，才能避免把兼容层误报为已完成原生后端。
+  - `write_pressure_smoke` 已知问题若继续隐藏，会导致 CI 假绿和外部错误认知；显式 known-failing 报告是最低限度护栏。
+  - Windows 专项测试集让“前进性”从口头承诺变成可执行证据，同时不破坏当前 phase-0 的主干推进节奏。
