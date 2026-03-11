@@ -19,6 +19,10 @@
 //!   3) later replace the internals with a **native IOCP completion driver** without changing user-facing hosting.
 //!
 //! This is a deliberate *bring-up* step to keep the project moving at "将军赶路" pace.
+//!
+//! Status (baseline 2026-03):
+//! - Default dataplane path is still the phase-0 wrapper (not native overlapped socket submission).
+//! - Native completion is available only as an opt-in prototype via `native-completion` feature/gate.
 
 use core::mem::MaybeUninit;
 

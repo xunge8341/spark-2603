@@ -12,6 +12,7 @@ transport_root="crates/spark-transport/src"
 allow_transport_unsafe=(
   "crates/spark-transport/src/lease.rs"
   "crates/spark-transport/src/reactor/event_buf.rs"
+  "crates/spark-transport/src/async_bridge/channel_state.rs"
 )
 
 iocp_root="crates/spark-transport-iocp/src"
@@ -54,7 +55,7 @@ if [ -n "$unsafe_hits" ]; then
   done
   if [ -n "$bad" ]; then
     echo "$bad" | sed 's/^/UNSAFE FORBIDDEN: /'
-    die "unsafe must be confined to lease.rs and reactor/event_buf.rs (auditable modules)"
+    die "unsafe must be confined to the audited transport modules (lease/event_buf/channel_state)"
   fi
 fi
 

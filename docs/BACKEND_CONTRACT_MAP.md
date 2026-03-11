@@ -1,31 +1,34 @@
 # Backend Contract Map
 
-This document is the **single source of truth** for what "backend correctness" means for Spark transport.
+This file is the source of truth for backend correctness scope and current status.
 
-The goal is to make multi-backend bring-up (IOCP / epoll / kqueue / io_uring / WASI) **mechanical**:
-each backend must pass the same P0 contract suite, and backend-specific event-model differences must be
-**absorbed in the driver**, never leaked into user semantics.
+## P0 contracts and protected risks
 
-## P0 contracts and what they protect
+| Contract | Risk prevented |
+|---|---|
+| close_evidence / abortive_close_evidence | zombie channels, shutdown inconsistency |
+| flush_limited_progress | partial-writable stalls and tail-latency blowups |
+| outbound_partial_vectored | loss/duplication under short write |
+| framing_roundtrip (segments + random cuts) | protocol corruption under fragmentation |
+| backpressure / drain / fairness | deadlock/starvation and scheduler collapse |
 
-| Contract | Risk it prevents | Backend differences absorbed |
-|---|---|---|
-| close_evidence / abortive_close_evidence | zombie channels, inconsistent shutdown | completion vs readiness close notification; RST/ERROR mapping |
-| flush_limited_progress | tail-latency blow-ups under partial writability | writable event loss; edge vs level readiness |
-| outbound_partial_vectored | data loss/duplication under partial writes | short write semantics; iovec partial progress |
-| framing_roundtrip (segments + random cuts) | protocol corruption under segmentation | recv fragmentation differences |
-| backpressure / drain / fairness | deadlocks and starvation | event batching, scheduling |
+## Backend status baseline (2026-03)
 
-## Invariants every backend must preserve
+| Backend crate | Current role | Contract status | Default gate status |
+|---|---|---|---|
+| `spark-transport-mio` | Primary dataplane backend | Primary path for contract execution | Blocking via `verify.sh` workspace + contract suite |
+| `spark-transport-iocp` | Windows leaf boundary (phase-0 wrapper by default) | Runnable completion prototype exists behind feature flag; native socket overlapped path pending | Non-blocking unless `SPARK_VERIFY_COMPLETION_GATE=1` |
+| `spark-engine-uring` | Local engine / bring-up scaffold | Not a parity backend yet | Not a dedicated blocking gate |
 
-- **Forward progress**: once bytes are queued, bounded driver ticks must eventually attempt flush.
-- **No semantic leakage**: edge/level/completion differences must not change observable behavior.
-- **Stable observability**: evidence + metrics names/fields are frozen in `spark_uci::names`.
+## Non-negotiable invariants
 
-## Bring-up order (North Star aligned)
+- Forward progress: queued outbound bytes must keep getting bounded flush attempts.
+- No semantic leakage: edge/level/completion differences cannot leak to user semantics.
+- Stable observability: evidence/metric names are frozen in `spark_uci::names`.
+- Driver kernel contract baseline stays frozen: `install_channel() -> sync_interest(chan_id)`.
 
-1. **Freeze surface** (traits + ADR), no behavior changes.
-2. **IOCP correctness** first (Windows is a hard requirement).
-3. **epoll** (Linux) then **kqueue** (macOS).
-4. Add **io_uring** and **WASI sockets** as opt-in backends behind feature flags.
+## Bring-up order (still valid)
 
+1. Freeze semantics in core driver/contract tests.
+2. Close Windows IOCP correctness gap.
+3. Keep Linux/macOS parity expansion mechanical (epoll/kqueue/io_uring) via same contracts.
