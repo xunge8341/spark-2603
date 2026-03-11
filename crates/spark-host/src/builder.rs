@@ -320,11 +320,17 @@ impl<S> HostBuilder<S> {
             if req.state.is_draining() {
                 return MgmtResponse::status(503, "Draining");
             }
+            if !req.state.is_accepting_new_requests() {
+                return MgmtResponse::status(503, "Not Accepting Requests");
+            }
             if !req.state.is_listener_ready() {
                 return MgmtResponse::status(503, "Listener Not Ready");
             }
             if !req.state.dependencies_ready() {
                 return MgmtResponse::status(503, "Dependencies Not Ready");
+            }
+            if req.state.is_overloaded() {
+                return MgmtResponse::status(503, "Overloaded");
             }
             MgmtResponse::ok("Ready")
         });
@@ -350,8 +356,13 @@ impl<S> HostBuilder<S> {
         // 通过 MgmtState::request_draining() 请求优雅退出。
         // 是否真正支持由具体 server/state 决定（默认 no-op）。
         self = self.map_post("/drain", "drain", |req| async move {
+            let already_draining = req.state.is_draining();
             req.state.request_draining();
-            MgmtResponse::ok("Draining")
+            if already_draining {
+                MgmtResponse::status(202, "Already Draining")
+            } else {
+                MgmtResponse::ok("Draining")
+            }
         });
 
         self
@@ -411,19 +422,27 @@ mod tests {
 
     struct FakeState {
         draining: bool,
+        accepting_new_requests: bool,
         listener_ready: bool,
         deps_ready: bool,
+        overloaded: bool,
     }
 
     impl MgmtState for FakeState {
         fn is_draining(&self) -> bool {
             self.draining
         }
+        fn is_accepting_new_requests(&self) -> bool {
+            self.accepting_new_requests
+        }
         fn is_listener_ready(&self) -> bool {
             self.listener_ready
         }
         fn dependencies_ready(&self) -> bool {
             self.deps_ready
+        }
+        fn is_overloaded(&self) -> bool {
+            self.overloaded
         }
     }
 
@@ -459,8 +478,10 @@ mod tests {
             body: Vec::new(),
             state: Arc::new(FakeState {
                 draining: false,
+                accepting_new_requests: true,
                 listener_ready: true,
                 deps_ready: false,
+                overloaded: false,
             }),
         };
         let resp = block_on((ready.handler)(req));

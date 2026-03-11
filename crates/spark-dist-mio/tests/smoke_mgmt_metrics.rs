@@ -18,7 +18,11 @@ impl Service<Bytes> for Noop {
     type Response = Option<Bytes>;
     type Error = KernelError;
 
-    async fn call(&self, _context: Context, _request: Bytes) -> Result<Self::Response, Self::Error> {
+    async fn call(
+        &self,
+        _context: Context,
+        _request: Bytes,
+    ) -> Result<Self::Response, Self::Error> {
         Ok(None)
     }
 }
@@ -29,7 +33,8 @@ fn mgmt_metrics_smoke_over_tcp() {
     let spec = HostBuilder::new()
         .use_default_diagnostics()
         .pipeline(|pb| pb.service(Noop))
-        .build().expect("host build");
+        .build()
+        .expect("host build");
 
     let routes = Arc::new(RouteTable::new());
     routes.replace_all(spec.mgmt.clone());
@@ -60,11 +65,40 @@ fn mgmt_metrics_smoke_over_tcp() {
     let read_bytes = format!("spark_dp_{}", mn::READ_BYTES_TOTAL);
     let write_bytes = format!("spark_dp_{}", mn::WRITE_BYTES_TOTAL);
 
-    assert!(buf.contains(&accepted), "missing {} in /metrics output", accepted);
-    assert!(buf.contains(&active), "missing {} in /metrics output", active);
-    assert!(buf.contains(&read_bytes), "missing {} in /metrics output", read_bytes);
-    assert!(buf.contains(&write_bytes), "missing {} in /metrics output", write_bytes);
+    assert!(
+        buf.contains(&accepted),
+        "missing {} in /metrics output",
+        accepted
+    );
+    assert!(
+        buf.contains(&active),
+        "missing {} in /metrics output",
+        active
+    );
+    assert!(
+        buf.contains(&read_bytes),
+        "missing {} in /metrics output",
+        read_bytes
+    );
+    assert!(
+        buf.contains(&write_bytes),
+        "missing {} in /metrics output",
+        write_bytes
+    );
 
+    state.set_listener_ready(false);
+    let ready_listener = server_for_sync.handle_mgmt_sync("GET", "/readyz", Vec::new());
+    assert_eq!(ready_listener.status, 503);
+
+    state.set_listener_ready(true);
+    state.set_dependencies_ready(false);
+    let ready_deps = server_for_sync.handle_mgmt_sync("GET", "/readyz", Vec::new());
+    assert_eq!(ready_deps.status, 503);
+    state.set_dependencies_ready(true);
+
+    state.set_draining(true);
+    let health_while_draining = server_for_sync.handle_mgmt_sync("GET", "/healthz", Vec::new());
+    assert_eq!(health_while_draining.status, 200);
 
     // Stop server.
     state.set_draining(true);
@@ -74,5 +108,5 @@ fn mgmt_metrics_smoke_over_tcp() {
 
     // Also sanity-check drain route toggles readiness.
     let resp = server_for_sync.handle_mgmt_sync("POST", "/drain", Vec::new());
-    assert_eq!(resp.status, 200);
+    assert!(matches!(resp.status, 200 | 202));
 }

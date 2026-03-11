@@ -42,3 +42,16 @@
   - completion gate: `SPARK_VERIFY_COMPLETION_GATE=1`
 - 默认报告（known-failing 可见）
   - Windows `write_pressure_smoke` known-failing 状态输出（不允许静默 ignore）。
+
+
+## KI-003: drain 收敛边界仍是“按请求 timeout 上界”（P1）
+
+- 现象：
+  - 当前 in-flight 收敛以路由 request timeout/default timeout 作为 deadline 上界。
+  - 对“连接级半关闭 + 分阶段取消（headers/body/handler）”尚未做更细分的中断语义。
+- 影响：
+  - drain 语义已闭环，但长尾请求的停止粒度仍受超时配置精度限制。
+- 当前策略：
+  - 拒绝新请求 + 在途请求 deadline 收敛，保证可预期上界。
+- 后续方向：
+  - 若需要更强确定性，可在后续迭代引入分阶段 cancel token（不在本轮范围）。

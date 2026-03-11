@@ -64,3 +64,10 @@ This document is the trunk baseline. It must match code and verification scripts
 ## Update T6（扩展点整理）
 - pipeline builder 暴露 `app_service_options(...)` 作为 per-handler/per-protocol 覆盖入口（不引入额外多层 trait）。
 - dataplane 配置新增并文档化 app-service 并发/队列/过载策略字段，并通过 `describe_effective()` 对外可审计。
+
+
+## Update T7（drain/readiness 生命周期闭环）
+- `EmberState` 新增轻量状态面：`accepting_new_requests`、`active_requests`、`overloaded`，并保持 `draining/listener_ready/dependencies_ready` 组合可观测。
+- `/readyz` 语义收敛为：非 draining、可接收新请求、listener ready、dependencies ready、非 overloaded。
+- `/drain` 不再只是切标志：std/transport server 均在 drain 后拒绝新请求，并对在途请求按 request timeout deadline 收敛。
+- 边界说明：当前依赖就绪仍是布尔聚合，不引入外部依赖探针框架。
