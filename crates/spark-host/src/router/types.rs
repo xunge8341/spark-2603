@@ -90,3 +90,31 @@ impl std::fmt::Debug for RouteEntry {
             .finish()
     }
 }
+
+impl RouteEntry {
+    #[inline]
+    pub fn effective_request_timeout(&self, default: Duration) -> Duration {
+        self.request_timeout.unwrap_or(default)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::RouteEntry;
+    use crate::router::{MgmtRequest, MgmtResponse};
+    use std::sync::Arc;
+    use std::time::Duration;
+
+    #[test]
+    fn effective_request_timeout_prefers_route_override() {
+        let entry = RouteEntry {
+            route_id: "r".into(),
+            handler: Arc::new(|_req: MgmtRequest| Box::pin(async { MgmtResponse::ok("OK") })),
+            request_timeout: Some(Duration::from_millis(50)),
+        };
+        assert_eq!(
+            entry.effective_request_timeout(Duration::from_secs(1)),
+            Duration::from_millis(50)
+        );
+    }
+}
