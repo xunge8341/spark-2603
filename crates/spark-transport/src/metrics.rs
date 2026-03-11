@@ -28,6 +28,11 @@ pub struct DataPlaneMetrics {
 
     pub flush_limited_total: AtomicU64,
 
+    pub overload_reject_total: AtomicU64,
+    pub overload_backpressure_total: AtomicU64,
+    pub overload_close_total: AtomicU64,
+    pub app_queue_high_watermark: AtomicU64,
+
     // Cumulation stats (copy/coalesce on stream read path).
     pub inbound_coalesce_total: AtomicU64,
     pub inbound_copied_bytes_total: AtomicU64,
@@ -86,6 +91,11 @@ pub struct DataPlaneMetricsSnapshot {
     pub inbound_frame_too_large_total: u64,
 
     pub flush_limited_total: u64,
+
+    pub overload_reject_total: u64,
+    pub overload_backpressure_total: u64,
+    pub overload_close_total: u64,
+    pub app_queue_high_watermark: u64,
 
     pub inbound_coalesce_total: u64,
     pub inbound_copied_bytes_total: u64,
@@ -168,6 +178,10 @@ impl DataPlaneMetrics {
                 .inbound_frame_too_large_total
                 .load(Ordering::Relaxed),
             flush_limited_total: self.flush_limited_total.load(Ordering::Relaxed),
+            overload_reject_total: self.overload_reject_total.load(Ordering::Relaxed),
+            overload_backpressure_total: self.overload_backpressure_total.load(Ordering::Relaxed),
+            overload_close_total: self.overload_close_total.load(Ordering::Relaxed),
+            app_queue_high_watermark: self.app_queue_high_watermark.load(Ordering::Relaxed),
             inbound_coalesce_total: self.inbound_coalesce_total.load(Ordering::Relaxed),
             inbound_copied_bytes_total: self.inbound_copied_bytes_total.load(Ordering::Relaxed),
             rx_lease_tokens_total: self.rx_lease_tokens_total.load(Ordering::Relaxed),
@@ -309,6 +323,45 @@ impl DataPlaneMetrics {
     pub fn record_flush_limited(&self) {
         self.flush_limited_total.fetch_add(1, Ordering::Relaxed);
     }
+
+    #[inline]
+    pub fn record_overload_reject(&self, count: u64) {
+        if count > 0 {
+            self.overload_reject_total
+                .fetch_add(count, Ordering::Relaxed);
+        }
+    }
+
+    #[inline]
+    pub fn record_overload_backpressure(&self, count: u64) {
+        if count > 0 {
+            self.overload_backpressure_total
+                .fetch_add(count, Ordering::Relaxed);
+        }
+    }
+
+    #[inline]
+    pub fn record_overload_close(&self, count: u64) {
+        if count > 0 {
+            self.overload_close_total
+                .fetch_add(count, Ordering::Relaxed);
+        }
+    }
+
+    #[inline]
+    pub fn observe_app_queue_high_watermark(&self, queue_len: u64) {
+        let _ = self.app_queue_high_watermark.fetch_update(
+            Ordering::Relaxed,
+            Ordering::Relaxed,
+            |cur| {
+                if queue_len > cur {
+                    Some(queue_len)
+                } else {
+                    None
+                }
+            },
+        );
+    }
 }
 
 impl DataPlaneMetricsSnapshot {
@@ -393,6 +446,18 @@ impl DataPlaneMetricsSnapshot {
             flush_limited_total: self
                 .flush_limited_total
                 .saturating_sub(base.flush_limited_total),
+            overload_reject_total: self
+                .overload_reject_total
+                .saturating_sub(base.overload_reject_total),
+            overload_backpressure_total: self
+                .overload_backpressure_total
+                .saturating_sub(base.overload_backpressure_total),
+            overload_close_total: self
+                .overload_close_total
+                .saturating_sub(base.overload_close_total),
+            app_queue_high_watermark: self
+                .app_queue_high_watermark
+                .saturating_sub(base.app_queue_high_watermark),
             inbound_coalesce_total: self
                 .inbound_coalesce_total
                 .saturating_sub(base.inbound_coalesce_total),
@@ -553,6 +618,11 @@ mod tests {
         m.record_rx_materialize(128);
         m.record_rx_cumulation_copy(4096);
         m.record_flush_limited();
+        m.record_overload_reject(2);
+        m.record_overload_backpressure(3);
+        m.record_overload_close(1);
+        m.observe_app_queue_high_watermark(6);
+        m.observe_app_queue_high_watermark(4);
 
         let snap = m.snapshot();
         assert_eq!(snap.read_bytes_total, 4096);
@@ -569,6 +639,10 @@ mod tests {
         assert_eq!(snap.rx_materialize_bytes_total, 128);
         assert_eq!(snap.rx_cumulation_copy_bytes_total, 4096);
         assert_eq!(snap.flush_limited_total, 1);
+        assert_eq!(snap.overload_reject_total, 2);
+        assert_eq!(snap.overload_backpressure_total, 3);
+        assert_eq!(snap.overload_close_total, 1);
+        assert_eq!(snap.app_queue_high_watermark, 6);
     }
 
     #[test]

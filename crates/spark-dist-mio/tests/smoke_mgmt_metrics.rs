@@ -110,3 +110,42 @@ fn mgmt_metrics_smoke_over_tcp() {
     let resp = server_for_sync.handle_mgmt_sync("POST", "/drain", Vec::new());
     assert!(matches!(resp.status, 200 | 202));
 }
+
+#[test]
+fn mgmt_metrics_expose_overload_counters() {
+    let spec = HostBuilder::new()
+        .use_default_diagnostics()
+        .pipeline(|pb| pb.service(Noop))
+        .build()
+        .expect("host build");
+
+    spec.metrics
+        .overload_reject_total
+        .store(1, std::sync::atomic::Ordering::Relaxed);
+    spec.metrics
+        .app_queue_high_watermark
+        .store(3, std::sync::atomic::Ordering::Relaxed);
+
+    let routes = Arc::new(RouteTable::new());
+    routes.replace_all(spec.mgmt.clone());
+    let state = Arc::new(EmberState::new());
+    let server = Server::new(spec.config.clone(), routes, state);
+
+    let resp = server.handle_mgmt_sync("GET", "/metrics", Vec::new());
+    assert_eq!(resp.status, 200);
+    let body = String::from_utf8(resp.body).unwrap_or_default();
+
+    let overload_reject = format!("spark_dp_{} 1", mn::OVERLOAD_REJECT_TOTAL);
+    assert!(
+        body.contains(&overload_reject),
+        "missing overload counter in /metrics: {}",
+        overload_reject
+    );
+
+    let queue_hwm = format!("spark_dp_{} 3", mn::APP_QUEUE_HIGH_WATERMARK);
+    assert!(
+        body.contains(&queue_hwm),
+        "missing queue watermark metric in /metrics: {}",
+        queue_hwm
+    );
+}

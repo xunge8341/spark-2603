@@ -1552,6 +1552,7 @@ where
 
             match state {
                 TaskState::New => {
+                    let metrics = self.metrics.as_ref();
                     let ch = match self.channels.get_mut(idx) {
                         Some(Some(ch)) if ch.chan_id() == chan_id => ch,
                         _ => {
@@ -1612,6 +1613,11 @@ where
                         .record_inbound_cumulation(coalesce_count, copied_bytes);
                     self.metrics
                         .record_rx_cumulation_copy(cumulation_copy_bytes);
+                    let overload_stats = ch.take_app_overload_stats();
+                    metrics.record_overload_reject(overload_stats.reject_total);
+                    metrics.record_overload_backpressure(overload_stats.backpressure_total);
+                    metrics.record_overload_close(overload_stats.close_total);
+                    metrics.observe_app_queue_high_watermark(overload_stats.queue_high_watermark);
 
                     if let Some(fut) = ch.take_app_future() {
                         slot.state = TaskState::App { fut };
@@ -1643,6 +1649,7 @@ where
                             // 但 flush_outbound() 需要再次可变借用 self.channels，因此不能在持有 ch 的可变借用时调用。
                             // 解决方式：先在一个短作用域内完成对 ch 的修改并取出 next/backlog 标志，再释放借用后 flush。
 
+                            let metrics = self.metrics.as_ref();
                             let (next_fut, has_backlog) = {
                                 let ch = match self.channels.get_mut(idx) {
                                     Some(Some(ch)) if ch.chan_id() == chan_id => ch,
@@ -1654,6 +1661,15 @@ where
 
                                 // 回调 pipeline，写回响应/启动下一条。
                                 ch.on_app_complete(res);
+                                let overload_stats = ch.take_app_overload_stats();
+                                metrics.record_overload_reject(overload_stats.reject_total);
+                                metrics.record_overload_backpressure(
+                                    overload_stats.backpressure_total,
+                                );
+                                metrics.record_overload_close(overload_stats.close_total);
+                                metrics.observe_app_queue_high_watermark(
+                                    overload_stats.queue_high_watermark,
+                                );
 
                                 // 取出下一条 future（如果已就绪）。
                                 let next = ch.take_app_future();

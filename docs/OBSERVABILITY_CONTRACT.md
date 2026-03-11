@@ -45,7 +45,11 @@
 - Fairness / Cumulation
   - `flush_limited_total`
   - `inbound_coalesce_total`, `inbound_copied_bytes_total`
-
+- App overload（per-connection service handler）
+  - `overload_reject_total`（queue 已满且 `overload_action=FailFast`）
+  - `overload_backpressure_total`（queue 已满且 `overload_action=Backpressure`）
+  - `overload_close_total`（queue 已满且 `overload_action=CloseConnection`）
+  - `app_queue_high_watermark`（每连接 app queue 峰值，导出为进程级 max gauge）
 
 
 ## Driver kernel internals（P1 stable counters）

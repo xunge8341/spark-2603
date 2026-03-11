@@ -15,8 +15,8 @@ use super::dyn_channel::DynChannel;
 use super::outbound_buffer::{FlushStatus, WritabilityChange};
 use super::pipeline::FrameDecoderProfile;
 use super::pipeline::{
-    AppServiceOptions, ChannelPipeline, ChannelPipelineBuilder, DelimiterOptions, Http1Options,
-    LengthFieldOptions, LineOptions, Varint32Options,
+    AppOverloadStats, AppServiceOptions, ChannelPipeline, ChannelPipelineBuilder, DelimiterOptions,
+    Http1Options, LengthFieldOptions, LineOptions, Varint32Options,
 };
 use super::task::AppFuture;
 use super::OutboundFrame;
@@ -376,6 +376,12 @@ where
     /// driver：是否有 backlog 请求。
     pub fn has_app_backlog(&self) -> bool {
         self.pipeline.has_app_backlog()
+    }
+
+    /// driver：提取并清零本连接 app overload 计数。
+    #[inline]
+    pub fn take_app_overload_stats(&mut self) -> AppOverloadStats {
+        self.pipeline.take_app_overload_stats()
     }
 
     /// driver：业务 future 完成后回调。

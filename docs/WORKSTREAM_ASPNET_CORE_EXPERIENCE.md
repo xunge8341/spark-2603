@@ -76,6 +76,7 @@
 
 ## T5/T6 增量（并发治理与扩展口子）
 - 新增 app-service 级 Options：`max_inflight_per_connection`、`max_queue_per_connection`、`overload_action`，通过 `ChannelPipelineBuilder::app_service_options(...)` 接入；默认 profile 不变。
+- overload 行为已接入系统级可观测：`overload_reject_total`、`overload_backpressure_total`、`overload_close_total` 与 `app_queue_high_watermark` 在 transport metrics 与 `/metrics` 中可见。
 - 过载行为明确化：
   - `FailFast`：直接透传异常（拒绝当前请求）；
   - `Backpressure`：触发 `writabilityChanged(false)` 让上层 handler 可感知并限流；

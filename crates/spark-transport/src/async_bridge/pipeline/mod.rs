@@ -39,7 +39,7 @@ pub use channel_pipeline::ChannelPipeline;
 #[allow(unused_imports)]
 pub use handler::ChannelHandler;
 #[allow(unused_imports)]
-pub use service_handler::{AppServiceOptions, OverloadAction};
+pub use service_handler::{AppOverloadStats, AppServiceOptions, OverloadAction};
 
 #[allow(unused_imports)]
 pub use profile::FrameDecoderProfile;

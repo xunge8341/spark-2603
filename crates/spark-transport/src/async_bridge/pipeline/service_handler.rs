@@ -47,6 +47,14 @@ impl Default for AppServiceOptions {
     }
 }
 
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub struct AppOverloadStats {
+    pub reject_total: u64,
+    pub backpressure_total: u64,
+    pub close_total: u64,
+    pub queue_high_watermark: u64,
+}
+
 /// 业务 Service handler（DotNetty 经验：pipeline 同步、业务异步通过 Task/Future 承载）。
 ///
 /// 行为：
@@ -66,6 +74,11 @@ pub struct AppServiceHandler<A> {
 
     // 后续请求排队。
     queue: VecDeque<Bytes>,
+
+    overload_reject_total: u64,
+    overload_backpressure_total: u64,
+    overload_close_total: u64,
+    queue_high_watermark: u64,
 }
 
 impl<A> AppServiceHandler<A>
@@ -80,6 +93,10 @@ where
             inflight_futures: VecDeque::new(),
             active_calls: 0,
             queue: VecDeque::new(),
+            overload_reject_total: 0,
+            overload_backpressure_total: 0,
+            overload_close_total: 0,
+            queue_high_watermark: 0,
         }
     }
 
@@ -116,8 +133,29 @@ where
     pub fn has_app_backlog(&self) -> bool {
         !self.queue.is_empty() || !self.inflight_futures.is_empty()
     }
-}
 
+    #[inline]
+    fn note_queue_high_watermark(&mut self) {
+        let q = self.queue.len() as u64;
+        if q > self.queue_high_watermark {
+            self.queue_high_watermark = q;
+        }
+    }
+
+    #[inline]
+    pub fn take_overload_stats(&mut self) -> AppOverloadStats {
+        let stats = AppOverloadStats {
+            reject_total: self.overload_reject_total,
+            backpressure_total: self.overload_backpressure_total,
+            close_total: self.overload_close_total,
+            queue_high_watermark: self.queue_high_watermark,
+        };
+        self.overload_reject_total = 0;
+        self.overload_backpressure_total = 0;
+        self.overload_close_total = 0;
+        stats
+    }
+}
 impl<A, Ev, Io> ChannelHandler<A, Ev, Io> for AppServiceHandler<A>
 where
     A: Service<Bytes, Response = Option<Bytes>, Error = KernelError> + Send + Sync + 'static,
@@ -136,15 +174,20 @@ where
             self.active_calls += 1;
         } else if self.queue.len() < self.opts.max_queue_per_connection {
             self.queue.push_back(msg);
+            self.note_queue_high_watermark();
         } else {
             match self.opts.overload_action {
                 OverloadAction::FailFast => {
+                    self.overload_reject_total = self.overload_reject_total.saturating_add(1);
                     ctx.fire_exception_caught(KernelError::NoMem)?;
                 }
                 OverloadAction::Backpressure => {
+                    self.overload_backpressure_total =
+                        self.overload_backpressure_total.saturating_add(1);
                     ctx.fire_channel_writability_changed(false)?;
                 }
                 OverloadAction::CloseConnection => {
+                    self.overload_close_total = self.overload_close_total.saturating_add(1);
                     ctx.close()?;
                 }
             }
@@ -200,6 +243,10 @@ where
         self.inflight_futures.clear();
         self.active_calls = 0;
         self.queue.clear();
+        self.overload_reject_total = 0;
+        self.overload_backpressure_total = 0;
+        self.overload_close_total = 0;
+        self.queue_high_watermark = 0;
         ctx.fire_channel_inactive()
     }
 
@@ -356,6 +403,9 @@ mod tests {
         let _ = h.channel_read(&mut ctx, &mut st, Bytes::from_static(b"c"));
 
         assert_eq!(ctx.exception_count, 1);
+        let stats = h.take_overload_stats();
+        assert_eq!(stats.reject_total, 1);
+        assert_eq!(stats.queue_high_watermark, 1);
     }
 
     #[test]
@@ -374,6 +424,8 @@ mod tests {
         let _ = h.channel_read(&mut ctx, &mut st, Bytes::from_static(b"b"));
 
         assert_eq!(ctx.backpressure_false, 1);
+        let stats = h.take_overload_stats();
+        assert_eq!(stats.backpressure_total, 1);
     }
 
     #[test]
@@ -392,5 +444,7 @@ mod tests {
         let _ = h.channel_read(&mut ctx, &mut st, Bytes::from_static(b"b"));
 
         assert_eq!(ctx.close_count, 1);
+        let stats = h.take_overload_stats();
+        assert_eq!(stats.close_total, 1);
     }
 }

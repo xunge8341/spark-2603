@@ -128,6 +128,30 @@ pub fn render_prometheus(m: &DataPlaneMetrics) -> String {
     push_type_line(&mut out, n::FLUSH_LIMITED_TOTAL, "counter");
     push_sample_u64(&mut out, n::FLUSH_LIMITED_TOTAL, snap.flush_limited_total);
 
+    push_type_line(&mut out, n::OVERLOAD_REJECT_TOTAL, "counter");
+    push_sample_u64(
+        &mut out,
+        n::OVERLOAD_REJECT_TOTAL,
+        snap.overload_reject_total,
+    );
+
+    push_type_line(&mut out, n::OVERLOAD_BACKPRESSURE_TOTAL, "counter");
+    push_sample_u64(
+        &mut out,
+        n::OVERLOAD_BACKPRESSURE_TOTAL,
+        snap.overload_backpressure_total,
+    );
+
+    push_type_line(&mut out, n::OVERLOAD_CLOSE_TOTAL, "counter");
+    push_sample_u64(&mut out, n::OVERLOAD_CLOSE_TOTAL, snap.overload_close_total);
+
+    push_type_line(&mut out, n::APP_QUEUE_HIGH_WATERMARK, "gauge");
+    push_sample_u64(
+        &mut out,
+        n::APP_QUEUE_HIGH_WATERMARK,
+        snap.app_queue_high_watermark,
+    );
+
     push_type_line(&mut out, n::DRAINING_ENTER_TOTAL, "counter");
     push_sample_u64(&mut out, n::DRAINING_ENTER_TOTAL, snap.draining_enter_total);
 
@@ -360,11 +384,16 @@ mod tests {
     fn render_uses_stable_metric_names_contract() {
         let m = DataPlaneMetrics::default();
         m.accepted_total.store(1, Ordering::Relaxed);
+        m.overload_reject_total.store(2, Ordering::Relaxed);
 
         let text = render_prometheus(&m);
         let want = full_name(n::ACCEPTED_TOTAL);
         assert!(text.contains(&format!("# TYPE {want} counter")));
         assert!(text.contains(&format!("{want} 1")));
+
+        let overload = full_name(n::OVERLOAD_REJECT_TOTAL);
+        assert!(text.contains(&format!("# TYPE {overload} counter")));
+        assert!(text.contains(&format!("{overload} 2")));
     }
 
     #[test]
