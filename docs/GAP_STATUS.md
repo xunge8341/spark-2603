@@ -77,3 +77,8 @@ This document is the trunk baseline. It must match code and verification scripts
 - `/readyz` 语义收敛为：非 draining、可接收新请求、listener ready、dependencies ready、非 overloaded。
 - `/drain` 不再只是切标志：std/transport server 均在 drain 后拒绝新请求，并对在途请求按 request timeout deadline 收敛。
 - 边界说明：当前依赖就绪仍是布尔聚合，不引入外部依赖探针框架。
+
+## Update T7.1（transport-backed 生命周期回落补齐）
+- transport-backed 管理面在 `try_spawn_with(_perf)` 成功后，保持与 std server 一致的启动状态：`listener_ready=true`、`accepting_new_requests=true`、`overloaded=false`。
+- 新增 transport handle join wrapper：当 transport dataplane 线程退出（正常/panic）时，统一回落 `listener_ready=false`、`accepting_new_requests=false`、`overloaded=false`，避免“只在启动置 true，无退出回落”的状态漂移。
+- `active_requests` 继续由请求级 guard 维护；单测补齐“请求结束回到 0、重复 decrement 不下溢”约束，确保 drain/退出期间不出现负数语义或泄漏。

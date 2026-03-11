@@ -151,9 +151,25 @@ impl TransportServer {
         let dp = spawn(cfg, draining, service, metrics)?;
         self.state.set_listener_ready(true);
         self.state.set_accepting_new_requests(true);
+        self.state.set_overloaded(false);
+
+        let state = self.state();
+        let join = thread::spawn(move || match dp.join.join() {
+            Ok(()) => {
+                state.set_accepting_new_requests(false);
+                state.set_listener_ready(false);
+                state.set_overloaded(false);
+            }
+            Err(payload) => {
+                state.set_accepting_new_requests(false);
+                state.set_listener_ready(false);
+                state.set_overloaded(false);
+                std::panic::resume_unwind(payload);
+            }
+        });
 
         Ok(TransportServerHandle {
-            join: dp.join,
+            join,
             addr: dp.local_addr,
             state: self.state(),
         })
@@ -364,16 +380,19 @@ fn encode_resp(status: u16, content_type: &str, body: &[u8]) -> Bytes {
 
 #[cfg(test)]
 mod tests {
-    use super::HttpMgmtService;
+    use super::{HttpMgmtService, SpawnedTcpDataplane, TransportServer};
     use crate::http1::EmberState;
     use crate::util::block_on;
     use spark_buffer::Bytes;
     use spark_core::context::Context;
     use spark_core::service::Service;
-    use spark_host::mgmt_profile::MgmtRejectPolicy;
-    use spark_host::router::{MgmtApp, MgmtResponse, RouteTable};
+    use spark_host::mgmt_profile::{MgmtRejectPolicy, MgmtTransportProfileV1};
+    use spark_host::router::{MgmtApp, MgmtResponse, MgmtState, RouteTable};
+    use spark_transport::DataPlaneMetrics;
+    use std::net::{Ipv4Addr, SocketAddr};
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::Arc;
+    use std::thread;
     use std::time::Duration;
 
     fn build_service(
@@ -518,5 +537,63 @@ mod tests {
             .flatten()
             .unwrap_or_else(|| Bytes::from_static(b""));
         assert_eq!(resp_status(&bytes), Some(429));
+    }
+
+    #[test]
+    fn transport_server_exit_rolls_back_readiness_state() {
+        let profile = MgmtTransportProfileV1::default();
+        let routes = Arc::new(RouteTable::new());
+        let state = Arc::new(EmberState::new());
+        let metrics = Arc::new(DataPlaneMetrics::default());
+        let server = TransportServer::new(profile, routes, Arc::clone(&state), metrics);
+
+        let handle = server
+            .try_spawn_with(|_cfg, _draining, _service, _metrics| {
+                let join = thread::spawn(|| {});
+                Ok(SpawnedTcpDataplane {
+                    join,
+                    local_addr: SocketAddr::from((Ipv4Addr::LOCALHOST, 0)),
+                })
+            })
+            .unwrap_or_else(|e| panic!("spawn failed: {e}"));
+
+        assert!(state.is_listener_ready());
+        assert!(state.is_accepting_new_requests());
+        assert!(!state.is_overloaded());
+
+        let _ = handle.join.join();
+
+        assert!(!state.is_listener_ready());
+        assert!(!state.is_accepting_new_requests());
+        assert!(!state.is_overloaded());
+    }
+
+    #[test]
+    fn transport_service_active_requests_returns_to_zero_without_underflow() {
+        let mut app = MgmtApp::new();
+        app.map_get("/ok", |_req| async { MgmtResponse::ok("OK") });
+        let state = Arc::new(EmberState::new());
+        let svc = build_service(
+            app,
+            Arc::clone(&state),
+            Duration::from_secs(1),
+            4,
+            4,
+            MgmtRejectPolicy::ServiceUnavailable,
+        );
+
+        state.dec_active_requests();
+        assert_eq!(state.active_requests(), 0);
+
+        let out = block_on(svc.call(Context::default(), make_get("/ok")));
+        let bytes = out
+            .ok()
+            .flatten()
+            .unwrap_or_else(|| Bytes::from_static(b""));
+        assert_eq!(resp_status(&bytes), Some(200));
+        assert_eq!(state.active_requests(), 0);
+
+        state.dec_active_requests();
+        assert_eq!(state.active_requests(), 0);
     }
 }
