@@ -9,7 +9,7 @@ use crate::reactor::{Interest, KernelEvent, Reactor};
 use crate::{Budget, KernelError, Result, RxToken, TaskToken};
 use spark_core::service::Service;
 
-use super::pipeline::FrameDecoderProfile;
+use super::pipeline::{AppServiceOptions, FrameDecoderProfile};
 use crate::evidence::{EvidenceHandle, EvidenceSink};
 use crate::lease::{LeaseRegistry, RxLease};
 use crate::metrics::DataPlaneMetrics;
@@ -429,6 +429,7 @@ where
     low_watermark: usize,
     max_pending_write_bytes: usize,
     flush_budget: FlushBudget,
+    app_service_opts: AppServiceOptions,
 
     // Default per-channel draining timeout.
     //
@@ -544,6 +545,7 @@ where
             low_watermark: low,
             max_pending_write_bytes: usize::MAX,
             flush_budget,
+            app_service_opts: AppServiceOptions::default(),
             drain_timeout: std::time::Duration::from_secs(5),
             schedule_state: vec![ScheduleSlotState::default(); max_channels],
             pending_flush: Vec::with_capacity(64),
@@ -578,6 +580,7 @@ where
             Self::new_with_config(reactor, executor, app, limits, metrics, evidence, config);
         driver.drain_timeout = cfg.drain_timeout;
         driver.max_pending_write_bytes = cfg.max_pending_write_bytes;
+        driver.app_service_opts = cfg.app_service_options();
         driver
     }
 
@@ -709,6 +712,7 @@ where
                 self.flush_budget,
                 Arc::clone(&self.app),
                 self.evidence.clone(),
+                self.app_service_opts,
             ),
             _ => Channel::new_with_profile_and_flush_budget(
                 chan_id,
@@ -718,6 +722,7 @@ where
                 self.flush_budget,
                 Arc::clone(&self.app),
                 self.evidence.clone(),
+                self.app_service_opts,
             ),
         };
         if let Some(state) = self.task_state.get_mut(idx) {

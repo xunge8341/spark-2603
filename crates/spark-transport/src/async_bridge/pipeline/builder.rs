@@ -2,13 +2,13 @@ use std::sync::Arc;
 
 use spark_buffer::Bytes;
 
-use spark_core::service::Service;
+use super::super::dyn_channel::DynChannel;
 use crate::evidence::EvidenceSink;
 use crate::KernelError;
-use super::super::dyn_channel::DynChannel;
+use spark_core::service::Service;
 
 use super::handler::ChannelHandler;
-use super::{ChannelPipeline, HandlerVec};
+use super::{AppServiceOptions, ChannelPipeline, HandlerVec};
 use super::{DelimiterSpec, FrameDecoderProfile};
 
 /// Options for line-based framing.
@@ -55,7 +55,11 @@ pub struct Http1Options {
 
 impl Http1Options {
     #[inline]
-    pub fn with_limits(max_request_bytes: usize, max_head_bytes: usize, max_headers: usize) -> Self {
+    pub fn with_limits(
+        max_request_bytes: usize,
+        max_head_bytes: usize,
+        max_headers: usize,
+    ) -> Self {
         let max_request_bytes = max_request_bytes.max(1);
         let max_head_bytes = max_head_bytes.max(1).min(max_request_bytes);
         let max_headers = max_headers.max(1);
@@ -126,6 +130,7 @@ pub struct ChannelPipelineBuilder<A, Ev = Arc<dyn EvidenceSink>, Io = Box<dyn Dy
     ///
     /// Netty/DotNetty 语义：addLast。
     last: HandlerVec<A, Ev, Io>,
+    app_service: AppServiceOptions,
 }
 
 impl<A, Ev, Io> ChannelPipelineBuilder<A, Ev, Io>
@@ -143,6 +148,7 @@ where
 
             first: Vec::new(),
             last: Vec::new(),
+            app_service: AppServiceOptions::default(),
         }
     }
 
@@ -162,7 +168,11 @@ where
 
     /// Use HTTP/1 request framing (management-plane).
     pub fn http1(self, opts: Http1Options) -> Self {
-        self.framing(FrameDecoderProfile::http1_with_limits(opts.max_request_bytes, opts.max_head_bytes, opts.max_headers))
+        self.framing(FrameDecoderProfile::http1_with_limits(
+            opts.max_request_bytes,
+            opts.max_head_bytes,
+            opts.max_headers,
+        ))
     }
 
     /// Use length-field prefixed framing.
@@ -185,7 +195,6 @@ where
         self.profile = profile;
         self
     }
-
 
     /// 在 pipeline 头部插入一个 handler（Head 之后）。
     ///
@@ -218,8 +227,20 @@ where
         self
     }
 
+    /// Configure per-connection app-service concurrency and queue behavior.
+    pub fn app_service_options(mut self, opts: AppServiceOptions) -> Self {
+        self.app_service = opts.normalized();
+        self
+    }
+
     /// 生成 pipeline。
     pub fn build(self) -> ChannelPipeline<A, Ev, Io> {
-        ChannelPipeline::new_with_extras(self.app, self.profile, self.first, self.last)
+        ChannelPipeline::new_with_extras(
+            self.app,
+            self.profile,
+            self.first,
+            self.last,
+            self.app_service,
+        )
     }
 }

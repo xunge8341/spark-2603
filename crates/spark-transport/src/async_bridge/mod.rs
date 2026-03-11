@@ -26,7 +26,7 @@ pub use channel_state::tok_chan_id;
 pub use outbound_frame::{OutboundFrame, OUTBOUND_INLINE_MAX, OUTBOUND_SEG_MAX};
 
 // Framing profiles for built-in pipelines.
-pub use pipeline::FrameDecoderProfile;
+pub use pipeline::{AppServiceOptions, FrameDecoderProfile, OverloadAction};
 
 // Re-export codec primitives commonly needed for framing configuration.
 pub use spark_codec::ByteOrder;

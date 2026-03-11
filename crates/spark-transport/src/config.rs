@@ -1,4 +1,4 @@
-use crate::async_bridge::FrameDecoderProfile;
+use crate::async_bridge::{AppServiceOptions, FrameDecoderProfile, OverloadAction};
 use crate::policy::{FlushPolicy, WatermarkPolicy};
 use crate::Budget;
 use std::net::SocketAddr;
@@ -47,6 +47,9 @@ pub struct DataPlaneEffectiveConfig {
     pub max_frame_hint: usize,
     pub drain_timeout: Duration,
     pub max_pending_write_bytes: usize,
+    pub max_inflight_per_connection: usize,
+    pub max_queue_per_connection: usize,
+    pub overload_action: OverloadAction,
     pub emit_evidence_log: bool,
 }
 
@@ -154,6 +157,12 @@ pub struct DataPlaneOptions {
     pub drain_timeout: Duration,
     /// Hard cap for per-channel pending outbound bytes (`usize::MAX` keeps compatibility).
     pub max_pending_write_bytes: usize,
+    /// App-service per-connection inflight cap.
+    pub max_inflight_per_connection: usize,
+    /// App-service per-connection queued requests cap.
+    pub max_queue_per_connection: usize,
+    /// Overflow action when both inflight and queue are full.
+    pub overload_action: OverloadAction,
     pub diagnostics: DataPlaneDiagnostics,
 }
 
@@ -202,6 +211,7 @@ impl DataPlaneOptions {
         self.limits = self.limits.normalized();
         self.drain_timeout = self.drain_timeout.max(Duration::from_millis(1));
         self.max_pending_write_bytes = self.max_pending_write_bytes.max(1);
+        self.max_inflight_per_connection = self.max_inflight_per_connection.max(1);
         self
     }
 
@@ -296,6 +306,24 @@ impl DataPlaneOptions {
     }
 
     #[inline]
+    pub fn with_max_inflight_per_connection(mut self, v: usize) -> Self {
+        self.max_inflight_per_connection = v;
+        self
+    }
+
+    #[inline]
+    pub fn with_max_queue_per_connection(mut self, v: usize) -> Self {
+        self.max_queue_per_connection = v;
+        self
+    }
+
+    #[inline]
+    pub fn with_overload_action(mut self, action: OverloadAction) -> Self {
+        self.overload_action = action;
+        self
+    }
+
+    #[inline]
     pub fn with_diagnostics(mut self, diagnostics: DataPlaneDiagnostics) -> Self {
         self.diagnostics = diagnostics;
         self
@@ -334,6 +362,12 @@ pub struct DataPlaneConfig {
     pub drain_timeout: Duration,
     /// Hard cap for per-channel pending outbound bytes (`usize::MAX` keeps compatibility).
     pub max_pending_write_bytes: usize,
+    /// App-service per-connection inflight cap.
+    pub max_inflight_per_connection: usize,
+    /// App-service per-connection queued requests cap.
+    pub max_queue_per_connection: usize,
+    /// Overflow action when both inflight and queue are full.
+    pub overload_action: OverloadAction,
     /// Whether to emit best-effort evidence logs.
     pub emit_evidence_log: bool,
 }
@@ -385,6 +419,7 @@ impl DataPlaneConfig {
         self.max_accept_per_tick = self.max_accept_per_tick.max(1);
         self.drain_timeout = self.drain_timeout.max(Duration::from_millis(1));
         self.max_pending_write_bytes = self.max_pending_write_bytes.max(1);
+        self.max_inflight_per_connection = self.max_inflight_per_connection.max(1);
         self
     }
 
@@ -418,6 +453,16 @@ impl DataPlaneConfig {
         self.framing.max_frame_hint().max(1)
     }
 
+    #[inline]
+    pub fn app_service_options(&self) -> AppServiceOptions {
+        AppServiceOptions {
+            max_inflight_per_connection: self.max_inflight_per_connection,
+            max_queue_per_connection: self.max_queue_per_connection,
+            overload_action: self.overload_action,
+        }
+        .normalized()
+    }
+
     /// Build a stable, runtime-auditable effective config snapshot.
     #[inline]
     pub fn describe_effective(&self) -> DataPlaneEffectiveConfig {
@@ -433,6 +478,9 @@ impl DataPlaneConfig {
             max_frame_hint: normalized.max_frame_hint(),
             drain_timeout: normalized.drain_timeout,
             max_pending_write_bytes: normalized.max_pending_write_bytes,
+            max_inflight_per_connection: normalized.max_inflight_per_connection,
+            max_queue_per_connection: normalized.max_queue_per_connection,
+            overload_action: normalized.overload_action,
             emit_evidence_log: normalized.emit_evidence_log,
         }
     }
@@ -549,6 +597,24 @@ impl DataPlaneConfig {
         self
     }
 
+    #[inline]
+    pub fn with_max_inflight_per_connection(mut self, v: usize) -> Self {
+        self.max_inflight_per_connection = v;
+        self
+    }
+
+    #[inline]
+    pub fn with_max_queue_per_connection(mut self, v: usize) -> Self {
+        self.max_queue_per_connection = v;
+        self
+    }
+
+    #[inline]
+    pub fn with_overload_action(mut self, action: OverloadAction) -> Self {
+        self.overload_action = action;
+        self
+    }
+
     /// Set evidence logging (Options-style).
     #[inline]
     pub fn with_evidence_log(mut self, emit_evidence_log: bool) -> Self {
@@ -609,6 +675,9 @@ impl Default for DataPlaneConfig {
             max_accept_per_tick: 64,
             drain_timeout: Duration::from_secs(5),
             max_pending_write_bytes: usize::MAX,
+            max_inflight_per_connection: AppServiceOptions::default().max_inflight_per_connection,
+            max_queue_per_connection: AppServiceOptions::default().max_queue_per_connection,
+            overload_action: AppServiceOptions::default().overload_action,
             emit_evidence_log: false,
         }
     }
@@ -628,6 +697,9 @@ impl From<DataPlaneOptions> for DataPlaneConfig {
             max_accept_per_tick: limits.max_accept_per_tick,
             drain_timeout: value.drain_timeout.max(Duration::from_millis(1)),
             max_pending_write_bytes: value.max_pending_write_bytes.max(1),
+            max_inflight_per_connection: value.max_inflight_per_connection.max(1),
+            max_queue_per_connection: value.max_queue_per_connection,
+            overload_action: value.overload_action,
             emit_evidence_log: value.diagnostics.emit_evidence_log,
         }
     }
@@ -648,6 +720,9 @@ impl From<DataPlaneConfig> for DataPlaneOptions {
             budget: value.budget,
             drain_timeout: value.drain_timeout,
             max_pending_write_bytes: value.max_pending_write_bytes,
+            max_inflight_per_connection: value.max_inflight_per_connection,
+            max_queue_per_connection: value.max_queue_per_connection,
+            overload_action: value.overload_action,
             diagnostics: DataPlaneDiagnostics {
                 emit_evidence_log: value.emit_evidence_log,
             },

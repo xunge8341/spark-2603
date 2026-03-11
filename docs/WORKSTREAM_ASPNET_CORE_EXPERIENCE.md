@@ -72,3 +72,54 @@
 - `ServerConfig` 新增管理面 timeout/overload 配置入口，保持 profile 作为单一事实来源。
 - `HostBuilder` 默认诊断路由中，`/readyz` 不再只看 draining，而是组合 listener 与依赖健康。
 - 路由层新增 request timeout 元数据，可在 route 与 group 维度覆盖。
+
+## T5/T6 增量（并发治理与扩展口子）
+- 新增 app-service 级 Options：`max_inflight_per_connection`、`max_queue_per_connection`、`overload_action`，通过 `ChannelPipelineBuilder::app_service_options(...)` 接入；默认 profile 不变。
+- 过载行为明确化：
+  - `FailFast`：直接透传异常（拒绝当前请求）；
+  - `Backpressure`：触发 `writabilityChanged(false)` 让上层 handler 可感知并限流；
+  - `CloseConnection`：在恶性过载场景主动关闭连接。
+- 该扩展保持主干热路径不变：仅在 `AppServiceHandler` 的入站排队分支执行，不引入额外动态分发层。
+
+### 最小示例 1：metrics-style hook（writability/backpressure 观察）
+```rust
+struct MetricsHook;
+
+impl<A, Ev, Io> spark_transport::async_bridge::pipeline::ChannelHandler<A, Ev, Io> for MetricsHook
+where
+    Ev: spark_transport::evidence::EvidenceSink,
+    Io: spark_transport::async_bridge::DynChannel,
+{
+    fn channel_writability_changed(
+        &mut self,
+        ctx: &mut dyn spark_transport::async_bridge::pipeline::context::ChannelHandlerContext<A>,
+        _state: &mut spark_transport::async_bridge::channel_state::ChannelState<Ev, Io>,
+        is_writable: bool,
+    ) -> spark_transport::Result<()> {
+        // 这里可桥接到 metrics/tracing。
+        let _ = is_writable;
+        ctx.fire_channel_writability_changed(is_writable)
+    }
+}
+```
+
+### 最小示例 2：auth/logging-style middleware hook（request 生命周期）
+```rust
+struct LoggingHook;
+
+impl<A, Ev, Io> spark_transport::async_bridge::pipeline::ChannelHandler<A, Ev, Io> for LoggingHook
+where
+    Ev: spark_transport::evidence::EvidenceSink,
+    Io: spark_transport::async_bridge::DynChannel,
+{
+    fn channel_read(
+        &mut self,
+        ctx: &mut dyn spark_transport::async_bridge::pipeline::context::ChannelHandlerContext<A>,
+        _state: &mut spark_transport::async_bridge::channel_state::ChannelState<Ev, Io>,
+        msg: spark_buffer::Bytes,
+    ) -> spark_transport::Result<()> {
+        // 这里可做 auth/logging/审计。
+        ctx.fire_channel_read(msg)
+    }
+}
+```

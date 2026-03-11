@@ -650,3 +650,12 @@
 - “Near C++ performance” must be continuously verifiable in CI, not a one-off narrative.
 - Multi-scenario baselines reduce overfitting to a single happy-path benchmark.
 - Platform-split baselines make tradeoffs explicit and prevent Linux-only numbers from becoming implicit global truth.
+
+## 2026-03：T5/T6 并发与过载治理边界
+- 冻结 `AppServiceHandler` 并发模型为“有界并发 + 有界队列 + 明确过载动作”，不再允许无限 `VecDeque` 累积。
+- `AppServiceOptions` 成为稳定扩展点：
+  - `max_inflight_per_connection`
+  - `max_queue_per_connection`
+  - `overload_action`（`FailFast | Backpressure | CloseConnection`）
+- 维持 driver contract baseline 不变：不修改 `install_channel() -> sync_interest(chan_id)`。
+- 扩展策略：仅开放必要 hook（builder/config 覆盖入口），不引入额外 middleware 生态层与多层抽象。
