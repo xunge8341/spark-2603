@@ -34,7 +34,7 @@ This document is the trunk baseline. It must match code and verification scripts
 **North Star:** IOCP/epoll/kqueue/io_uring pass same P0 contracts.
 
 ### Gap 3 — CI/nightly hard gates
-**Now:** perf/bench/completion are opt-in (not default blocking in `verify.sh`).
+**Now:** day-time `verify.*` keeps perf/bench/completion opt-in, while `verify_nightly.*` enables perf/bench/completion/no_std by default.
 **North Star:** policy-driven default gates per platform with clear blocking rules.
 
 ### Gap 4 — Safety hardening depth
@@ -55,6 +55,8 @@ This document is the trunk baseline. It must match code and verification scripts
 - perf gate 从单点 `SPARK_PERF` 解析升级为“场景矩阵 + 基线对比”：`scripts/perf_gate.sh` 调用 `scripts/perf_report.sh` 生成 JSON/CSV，再按 `perf/baselines/perf_gate_*.json` 对比。
 - 指标口径覆盖吞吐 + 尾延迟 + syscall/batching + copy + backpressure，并补充 `peak_rss_kib` 与 `peak_inflight_buffer_bytes`。
 - 基线按 Unix/Windows 分离，显式避免“Linux 最优数字外推所有平台”。
+- PowerShell perf gate 已与 shell 口径统一：同样走 `perf_report` JSON/CSV 合同，并按 scenario/global 双层阈值阻断。
+- nightly 路径（`verify_nightly.sh/.ps1`）默认开启 perf gate，普通 verify 继续保持可选。
 
 ## Update T5（主干并发与过载治理）
 - `AppServiceHandler` 从“单 inflight + 无上界 queue”升级为可配置模型：`max_inflight_per_connection` + `max_queue_per_connection` + `overload_action`（FailFast / Backpressure / CloseConnection）。

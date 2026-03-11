@@ -650,6 +650,7 @@
 - “Near C++ performance” must be continuously verifiable in CI, not a one-off narrative.
 - Multi-scenario baselines reduce overfitting to a single happy-path benchmark.
 - Platform-split baselines make tradeoffs explicit and prevent Linux-only numbers from becoming implicit global truth.
+- Shell/PowerShell gate logic must share the same report contract and threshold semantics; nightly wrappers are the default blocking path for perf gate.
 
 ## 2026-03：T5/T6 并发与过载治理边界
 - 冻结 `AppServiceHandler` 并发模型为“有界并发 + 有界队列 + 明确过载动作”，不再允许无限 `VecDeque` 累积。
