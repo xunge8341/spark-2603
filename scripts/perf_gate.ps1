@@ -1,29 +1,15 @@
-<#
-Run the local dataplane perf smoke and fail if coarse baseline thresholds regress.
+#!/usr/bin/env pwsh
+<#!
+Run perf report + JSON baseline comparison on Windows/PowerShell.
 
-Threshold resolution order:
-1) Baseline file (`SPARK_PERF_BASELINE`, else platform default under `perf/baselines/`)
-2) Explicit env var overrides:
-   - SPARK_MAX_SYSCALLS_PER_KIB
-   - SPARK_MIN_WRITEV_SHARE
+Baseline resolution order:
+1) SPARK_PERF_BASELINE
+2) perf/baselines/perf_gate_windows.json (on Windows)
+3) perf/baselines/perf_gate_default.json
 #>
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
-
-function Invoke-Step {
-  param(
-    [Parameter(Mandatory=$true)][string]$Label,
-    [Parameter(Mandatory=$true)][scriptblock]$Cmd
-  )
-
-  Write-Host $Label -ForegroundColor Cyan
-  & $Cmd
-
-  if ($LASTEXITCODE -ne 0) {
-    throw "Step failed ($Label) with exit code $LASTEXITCODE"
-  }
-}
 
 function Resolve-BaselinePath {
   $explicit = [Environment]::GetEnvironmentVariable("SPARK_PERF_BASELINE")
@@ -31,102 +17,79 @@ function Resolve-BaselinePath {
     return $explicit
   }
 
-  $platformFile = "unix.toml"
-  $sparkIsWindows = ($env:OS -eq 'Windows_NT')
-  if ($sparkIsWindows) {
-    $platformFile = "windows.toml"
-  }
-
-  $platformPath = Join-Path "perf\baselines" $platformFile
+  $platformFile = if ($env:OS -eq "Windows_NT") { "perf_gate_windows.json" } else { "perf_gate_unix.json" }
+  $platformPath = Join-Path "perf/baselines" $platformFile
   if (Test-Path $platformPath) {
     return $platformPath
   }
 
-  return (Join-Path "perf\baselines" "default.toml")
-}
-
-function Get-BaselineValue {
-  param(
-    [Parameter(Mandatory=$true)][string]$Path,
-    [Parameter(Mandatory=$true)][string]$Key,
-    [Parameter(Mandatory=$true)][string]$Default
-  )
-
-  if (-not (Test-Path $Path)) {
-    return $Default
-  }
-
-  $content = Get-Content -Path $Path -Raw
-  $pattern = '(?m)^\s*' + [regex]::Escape($Key) + '\s*=\s*(.+?)\s*$'
-  $match = [regex]::Match($content, $pattern)
-  if (-not $match.Success) {
-    return $Default
-  }
-
-  return $match.Groups[1].Value.Trim().Trim('"')
-}
-
-function Get-EnvOrConfig {
-  param(
-    [Parameter(Mandatory=$true)][string]$Name,
-    [Parameter(Mandatory=$true)][string]$Fallback
-  )
-
-  $value = [Environment]::GetEnvironmentVariable($Name)
-  if ([string]::IsNullOrWhiteSpace($value)) {
-    return $Fallback
-  }
-  return $value
+  return "perf/baselines/perf_gate_default.json"
 }
 
 $BaselinePath = Resolve-BaselinePath
-$BaselineMaxSyscallsPerKiB = Get-BaselineValue -Path $BaselinePath -Key "max_syscalls_per_kib" -Default "1.0"
-$BaselineMinWritevShare = Get-BaselineValue -Path $BaselinePath -Key "min_writev_share" -Default "0.5"
-$BaselineProfile = Get-BaselineValue -Path $BaselinePath -Key "profile" -Default "default"
+$ReportDir = if ([string]::IsNullOrWhiteSpace($env:SPARK_BENCH_REPORT_DIR)) { "benchmark/reports" } else { $env:SPARK_BENCH_REPORT_DIR }
+$ReportJson = if ([string]::IsNullOrWhiteSpace($env:SPARK_BENCH_REPORT_JSON)) { Join-Path $ReportDir "perf_report.json" } else { $env:SPARK_BENCH_REPORT_JSON }
+$ReportCsv = if ([string]::IsNullOrWhiteSpace($env:SPARK_BENCH_REPORT_CSV)) { Join-Path $ReportDir "perf_report.csv" } else { $env:SPARK_BENCH_REPORT_CSV }
 
-$MaxSyscallsPerKiB = [double](Get-EnvOrConfig -Name "SPARK_MAX_SYSCALLS_PER_KIB" -Fallback $BaselineMaxSyscallsPerKiB)
-$MinWritevShare = [double](Get-EnvOrConfig -Name "SPARK_MIN_WRITEV_SHARE" -Fallback $BaselineMinWritevShare)
-
-Write-Host "Using perf baseline: $BaselinePath (profile=$BaselineProfile, max_syscalls_per_kib=$MaxSyscallsPerKiB, min_writev_share=$MinWritevShare)" -ForegroundColor DarkGray
-
-Invoke-Step "[1/2] cargo test -p spark-transport-contract --test perf_baseline --no-run --locked" {
-  cargo test -p spark-transport-contract --test perf_baseline --no-run --locked
-}
-
-Write-Host "[2/2] cargo test -p spark-transport-contract --test perf_baseline -- --ignored --nocapture" -ForegroundColor Cyan
-$cmd = 'cargo test -p spark-transport-contract --locked --test perf_baseline -- --ignored --nocapture 2>&1'
-$raw = & cmd.exe /d /c $cmd
+Write-Host "Using perf baseline: $BaselinePath" -ForegroundColor DarkGray
+Write-Host "[1/2] generate benchmark report" -ForegroundColor Cyan
+$env:SPARK_BENCH_REPORT_DIR = $ReportDir
+$env:SPARK_BENCH_REPORT_JSON = $ReportJson
+$env:SPARK_BENCH_REPORT_CSV = $ReportCsv
+& bash ./scripts/perf_report.sh
 if ($LASTEXITCODE -ne 0) {
-  throw "Step failed ([2/2] cargo test -p spark-transport-contract --test perf_baseline -- --ignored --nocapture) with exit code $LASTEXITCODE"
+  throw "Step failed ([1/2] generate benchmark report) with exit code $LASTEXITCODE"
 }
 
-$lines = @($raw)
-$lines | ForEach-Object { Write-Host $_ }
+Write-Host "[2/2] compare report with baseline" -ForegroundColor Cyan
+$pythonScript = @'
+import json
+import sys
 
-$perfLine = $lines |
-  ForEach-Object { $_ -split "`r?`n" } |
-  Where-Object { $_ -match '^\s*SPARK_PERF ' } |
-  Select-Object -Last 1
-if (-not $perfLine) {
-  throw "Failed to find SPARK_PERF output line."
+baseline_path, report_path = sys.argv[1], sys.argv[2]
+with open(baseline_path, 'r', encoding='utf-8') as f:
+    baseline = json.load(f)
+with open(report_path, 'r', encoding='utf-8') as f:
+    report = json.load(f)
+
+scenarios = {s['scenario']: s for s in report.get('scenarios', [])}
+errors = []
+
+def check(name, field, actual, expected, mode):
+    if mode == 'min' and actual < expected:
+        errors.append(f"{name}: {field}={actual} < min {expected}")
+    if mode == 'max' and actual > expected:
+        errors.append(f"{name}: {field}={actual} > max {expected}")
+
+for rule in baseline.get('scenarios', []):
+    name = rule['scenario']
+    actual = scenarios.get(name)
+    if actual is None:
+        errors.append(f"missing scenario in report: {name}")
+        continue
+    for field, threshold in rule.get('min', {}).items():
+        check(name, field, actual.get(field, 0), threshold, 'min')
+    for field, threshold in rule.get('max', {}).items():
+        check(name, field, actual.get(field, 0), threshold, 'max')
+
+global_rule = baseline.get('global', {})
+global_actual = report.get('global', {})
+for field, threshold in global_rule.get('max', {}).items():
+    value = global_actual.get(field)
+    if value is None:
+        continue
+    check('global', field, value, threshold, 'max')
+
+if errors:
+    print('Perf gate failed:')
+    for err in errors:
+        print(f' - {err}')
+    sys.exit(1)
+
+print('OK: perf gate passed for all scenarios.')
+'@
+
+& python3 -c $pythonScript -- $BaselinePath $ReportJson
+if ($LASTEXITCODE -ne 0) {
+  throw "Step failed ([2/2] compare report with baseline) with exit code $LASTEXITCODE"
 }
-$perfLine = $perfLine.Trim()
-
-$syscallsPerKiBMatch = [regex]::Match($perfLine, 'syscalls_per_kib=([0-9]+(?:\.[0-9]+)?)')
-$writevShareMatch = [regex]::Match($perfLine, 'writev_share=([0-9]+(?:\.[0-9]+)?)')
-if (-not $syscallsPerKiBMatch.Success -or -not $writevShareMatch.Success) {
-  throw "Failed to parse perf metrics from: $perfLine"
-}
-
-$syscallsPerKiB = [double]$syscallsPerKiBMatch.Groups[1].Value
-$writevShare = [double]$writevShareMatch.Groups[1].Value
-
-if ($syscallsPerKiB -gt $MaxSyscallsPerKiB) {
-  throw "Perf gate failed: syscalls_per_kib=$syscallsPerKiB exceeds $MaxSyscallsPerKiB"
-}
-
-if ($writevShare -lt $MinWritevShare) {
-  throw "Perf gate failed: writev_share=$writevShare is below $MinWritevShare"
-}
-
-Write-Host "OK: perf gate passed (profile=$BaselineProfile, syscalls_per_kib=$syscallsPerKiB, writev_share=$writevShare)." -ForegroundColor Green

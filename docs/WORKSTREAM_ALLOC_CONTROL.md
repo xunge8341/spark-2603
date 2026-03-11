@@ -75,5 +75,6 @@
 - `perf_report.json` 的 global 段接入 alloc 相关证据：
   - `alloc_count`（当前映射 `ob_q_growth`）
   - `alloc_bytes`（预留；后续可接 feature-gated allocator 统计）
+  - `alloc_bytes_unavailable_reason`（明确说明当前为何为 `null`，避免语义不清）
 - gate 对 `peak_inflight_buffer_bytes` 建立阈值，确保 batching/flush 策略演进不会放大驻留内存上界。
 - 该接线保持“证据先行”：在未启用统一 allocator 统计前，不伪造 alloc bytes 数字。

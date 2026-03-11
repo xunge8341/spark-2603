@@ -11,6 +11,7 @@
 
 说明：
   - 默认会跑 fmt / clippy / invariants / panic-free scan / L0 unsafe scan / contract suite / test。
+  - perf gate 默认不开启（避免日常 PR/本地验证时长飘移）；nightly 脚本默认开启。
   - 若设置 `SPARK_VERIFY_PERF_GATE=1`，结尾会追加一次 perf gate。
   - 若设置 `SPARK_VERIFY_BENCH_GATE=1`，结尾会追加一次 mio TCP echo bench gate。
   - 若设置 `SPARK_VERIFY_COMPLETION_GATE=1`，会额外编译 completion 原型（IOCP）。

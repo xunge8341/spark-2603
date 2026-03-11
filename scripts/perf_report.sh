@@ -120,6 +120,7 @@ report = {
         "peak_inflight_buffer_bytes": peak_inflight,
         "alloc_count": alloc_count,
         "alloc_bytes": None,
+        "alloc_bytes_unavailable_reason": "allocator-level byte accounting is not wired into perf_baseline yet; report keeps a stable placeholder instead of fabricating bytes",
     },
 }
 with open(out_json, 'w', encoding='utf-8') as f:

@@ -4,6 +4,7 @@ set -euo pipefail
 die(){ echo "ERROR: $*" 1>&2; exit 1; }
 
 # Treat rustc warnings as errors (best-effort).
+# Perf gate is opt-in for PR-speed/local determinism; nightly wrappers enable it by default.
 # Set SPARK_VERIFY_PERF_GATE=1 to append the local perf gate at the end.
 # Set SPARK_VERIFY_BENCH_GATE=1 to append the mio TCP echo bench gate at the end.
 # Set SPARK_VERIFY_COMPLETION_GATE=1 to run the native IOCP completion prototype tests.
