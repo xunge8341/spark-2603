@@ -53,3 +53,12 @@ This document is the trunk baseline. It must match code and verification scripts
 - perf gate 从单点 `SPARK_PERF` 解析升级为“场景矩阵 + 基线对比”：`scripts/perf_gate.sh` 调用 `scripts/perf_report.sh` 生成 JSON/CSV，再按 `perf/baselines/perf_gate_*.json` 对比。
 - 指标口径覆盖吞吐 + 尾延迟 + syscall/batching + copy + backpressure，并补充 `peak_rss_kib` 与 `peak_inflight_buffer_bytes`。
 - 基线按 Unix/Windows 分离，显式避免“Linux 最优数字外推所有平台”。
+
+## Update T5（主干并发与过载治理）
+- `AppServiceHandler` 从“单 inflight + 无上界 queue”升级为可配置模型：`max_inflight_per_connection` + `max_queue_per_connection` + `overload_action`（FailFast / Backpressure / CloseConnection）。
+- 默认值明确：`max_inflight_per_connection=1`、`max_queue_per_connection=1024`、`overload_action=FailFast`，确保不出现无限队列。
+- 新增单测覆盖：队列上限、背压信号传播、拒绝关闭语义。
+
+## Update T6（扩展点整理）
+- pipeline builder 暴露 `app_service_options(...)` 作为 per-handler/per-protocol 覆盖入口（不引入额外多层 trait）。
+- dataplane 配置新增并文档化 app-service 并发/队列/过载策略字段，并通过 `describe_effective()` 对外可审计。

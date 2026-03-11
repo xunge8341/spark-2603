@@ -15,8 +15,8 @@ use super::dyn_channel::DynChannel;
 use super::outbound_buffer::{FlushStatus, WritabilityChange};
 use super::pipeline::FrameDecoderProfile;
 use super::pipeline::{
-    ChannelPipeline, ChannelPipelineBuilder, DelimiterOptions, Http1Options, LengthFieldOptions,
-    LineOptions, Varint32Options,
+    AppServiceOptions, ChannelPipeline, ChannelPipelineBuilder, DelimiterOptions, Http1Options,
+    LengthFieldOptions, LineOptions, Varint32Options,
 };
 use super::task::AppFuture;
 use super::OutboundFrame;
@@ -89,6 +89,7 @@ where
         low_watermark: usize,
         app: Arc<A>,
         evidence: Ev,
+        app_opts: AppServiceOptions,
     ) -> Self {
         let limits = ChannelLimits::new(max_frame, high_watermark, low_watermark, usize::MAX);
         let flush_budget = FlushPolicy::default().budget(limits.max_frame);
@@ -100,6 +101,7 @@ where
             flush_budget,
             app,
             evidence,
+            app_opts,
         )
     }
 
@@ -110,6 +112,7 @@ where
         flush_budget: FlushBudget,
         app: Arc<A>,
         evidence: Ev,
+        app_opts: AppServiceOptions,
     ) -> Self {
         Self::new_with_profile_and_flush_budget(
             chan_id,
@@ -119,6 +122,7 @@ where
             flush_budget,
             app,
             evidence,
+            app_opts,
         )
     }
 
@@ -130,6 +134,7 @@ where
         flush_budget: FlushBudget,
         app: Arc<A>,
         evidence: Ev,
+        app_opts: AppServiceOptions,
     ) -> Self {
         let mut state = ChannelState::new(
             chan_id,
@@ -141,7 +146,7 @@ where
             evidence,
         );
 
-        let mut b = ChannelPipelineBuilder::<A, Ev, Io>::new(app);
+        let mut b = ChannelPipelineBuilder::<A, Ev, Io>::new(app).app_service_options(app_opts);
         b = match profile {
             FrameDecoderProfile::Line { max_frame } => b.line(LineOptions::new(max_frame)),
             FrameDecoderProfile::Delimiter {

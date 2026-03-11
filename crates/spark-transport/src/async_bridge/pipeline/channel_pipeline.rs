@@ -18,7 +18,7 @@ use super::frame_decoder::StreamFrameDecoderHandler;
 use super::frame_encoder::StreamFrameEncoderHandler;
 use super::handler::ChannelHandler;
 use super::head::HeadHandler;
-use super::service_handler::AppServiceHandler;
+use super::service_handler::{AppServiceHandler, AppServiceOptions};
 use super::tail::TailHandler;
 use super::FrameDecoderProfile;
 use super::HandlerVec;
@@ -85,6 +85,7 @@ where
             FrameDecoderProfile::line(max_frame),
             Vec::new(),
             Vec::new(),
+            AppServiceOptions::default(),
         )
     }
 
@@ -97,12 +98,13 @@ where
         profile: FrameDecoderProfile,
         first: HandlerVec<A, Ev, Io>,
         last: HandlerVec<A, Ev, Io>,
+        app_opts: AppServiceOptions,
     ) -> Self {
         Self {
             head: HeadHandler,
             encoder: StreamFrameEncoderHandler::new(profile),
             frame: StreamFrameDecoderHandler::new(profile),
-            app: AppServiceHandler::new(app),
+            app: AppServiceHandler::new(app, app_opts),
             tail: TailHandler,
             first,
             last,

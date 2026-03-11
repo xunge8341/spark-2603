@@ -3,17 +3,49 @@ use std::sync::Arc;
 
 use spark_buffer::Bytes;
 
+use super::super::dyn_channel::DynChannel;
 use crate::evidence::EvidenceSink;
 use crate::{KernelError, Result};
-use super::super::dyn_channel::DynChannel;
 use spark_core::context::Context as BizContext;
 use spark_core::service::Service;
 
-use super::context::ChannelHandlerContext;
-use super::handler::ChannelHandler;
 use super::super::channel_state::ChannelState;
 use super::super::task::AppFuture;
 use super::super::OutboundFrame;
+use super::context::ChannelHandlerContext;
+use super::handler::ChannelHandler;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum OverloadAction {
+    FailFast,
+    Backpressure,
+    CloseConnection,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct AppServiceOptions {
+    pub max_inflight_per_connection: usize,
+    pub max_queue_per_connection: usize,
+    pub overload_action: OverloadAction,
+}
+
+impl AppServiceOptions {
+    #[inline]
+    pub fn normalized(mut self) -> Self {
+        self.max_inflight_per_connection = self.max_inflight_per_connection.max(1);
+        self
+    }
+}
+
+impl Default for AppServiceOptions {
+    fn default() -> Self {
+        Self {
+            max_inflight_per_connection: 1,
+            max_queue_per_connection: 1024,
+            overload_action: OverloadAction::FailFast,
+        }
+    }
+}
 
 /// 业务 Service handler（DotNetty 经验：pipeline 同步、业务异步通过 Task/Future 承载）。
 ///
@@ -24,9 +56,13 @@ use super::super::OutboundFrame;
 // 注意：这里不 derive(Debug)，因为 `AppFuture`（dyn Future）不实现 Debug。
 pub struct AppServiceHandler<A> {
     app: Arc<A>,
+    opts: AppServiceOptions,
 
-    // 仅允许单 inflight（bring-up 阶段简化）。
-    inflight: Option<AppFuture>,
+    // driver may poll one future at a time; this queue holds ready-to-poll futures.
+    inflight_futures: VecDeque<AppFuture>,
+
+    // started and not yet completed.
+    active_calls: usize,
 
     // 后续请求排队。
     queue: VecDeque<Bytes>,
@@ -36,10 +72,13 @@ impl<A> AppServiceHandler<A>
 where
     A: Service<Bytes, Response = Option<Bytes>, Error = KernelError> + Send + Sync + 'static,
 {
-    pub fn new(app: Arc<A>) -> Self {
+    pub fn new(app: Arc<A>, opts: AppServiceOptions) -> Self {
+        let opts = opts.normalized();
         Self {
             app,
-            inflight: None,
+            opts,
+            inflight_futures: VecDeque::new(),
+            active_calls: 0,
             queue: VecDeque::new(),
         }
     }
@@ -51,11 +90,12 @@ where
     }
 
     fn maybe_start_next(&mut self) {
-        if self.inflight.is_some() {
-            return;
-        }
-        if let Some(req) = self.queue.pop_front() {
-            self.inflight = Some(self.start_call(req));
+        while self.active_calls < self.opts.max_inflight_per_connection {
+            let Some(req) = self.queue.pop_front() else {
+                break;
+            };
+            self.inflight_futures.push_back(self.start_call(req));
+            self.active_calls += 1;
         }
     }
 
@@ -66,7 +106,7 @@ where
     /// elsewhere in the pipeline.
     #[inline]
     pub fn take_app_future(&mut self) -> Option<AppFuture> {
-        self.inflight.take()
+        self.inflight_futures.pop_front()
     }
 
     /// Driver hook: whether the application handler has queued requests.
@@ -74,7 +114,7 @@ where
     /// Inherent for the same reason as `take_app_future`.
     #[inline]
     pub fn has_app_backlog(&self) -> bool {
-        !self.queue.is_empty()
+        !self.queue.is_empty() || !self.inflight_futures.is_empty()
     }
 }
 
@@ -86,16 +126,28 @@ where
 {
     fn channel_read(
         &mut self,
-        _ctx: &mut dyn ChannelHandlerContext<A>,
+        ctx: &mut dyn ChannelHandlerContext<A>,
         _state: &mut ChannelState<Ev, Io>,
         msg: Bytes,
     ) -> Result<()> {
         // Netty/DotNetty 的典型规则：保持 handler 非阻塞。
-        if self.inflight.is_none() {
-            self.inflight = Some(self.start_call(msg));
-        } else {
-            // 简单 FIFO 排队。
+        if self.active_calls < self.opts.max_inflight_per_connection {
+            self.inflight_futures.push_back(self.start_call(msg));
+            self.active_calls += 1;
+        } else if self.queue.len() < self.opts.max_queue_per_connection {
             self.queue.push_back(msg);
+        } else {
+            match self.opts.overload_action {
+                OverloadAction::FailFast => {
+                    ctx.fire_exception_caught(KernelError::NoMem)?;
+                }
+                OverloadAction::Backpressure => {
+                    ctx.fire_channel_writability_changed(false)?;
+                }
+                OverloadAction::CloseConnection => {
+                    ctx.close()?;
+                }
+            }
         }
 
         // 继续向后传播（若还有其他业务 handler）。bring-up 默认 tail 会丢弃。
@@ -103,11 +155,11 @@ where
     }
 
     fn take_app_future(&mut self) -> Option<AppFuture> {
-        self.inflight.take()
+        self.inflight_futures.pop_front()
     }
 
     fn has_app_backlog(&self) -> bool {
-        !self.queue.is_empty()
+        !self.queue.is_empty() || !self.inflight_futures.is_empty()
     }
 
     fn on_app_complete(
@@ -116,6 +168,10 @@ where
         _state: &mut ChannelState<Ev, Io>,
         result: core::result::Result<Option<Bytes>, KernelError>,
     ) -> Result<()> {
+        if self.active_calls > 0 {
+            self.active_calls -= 1;
+        }
+
         match result {
             Ok(Some(resp)) => {
                 // outbound：向前传播（tail->head）。
@@ -141,7 +197,8 @@ where
         ctx: &mut dyn ChannelHandlerContext<A>,
         _state: &mut ChannelState<Ev, Io>,
     ) -> Result<()> {
-        self.inflight = None;
+        self.inflight_futures.clear();
+        self.active_calls = 0;
         self.queue.clear();
         ctx.fire_channel_inactive()
     }
@@ -154,5 +211,186 @@ where
     ) -> Result<()> {
         // 默认透传。
         ctx.fire_exception_caught(err)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::async_bridge::channel_state::ChannelState;
+    use crate::async_bridge::dyn_channel::DynChannel;
+    use crate::async_bridge::pipeline::context::ChannelHandlerContext;
+    use crate::evidence::NoopEvidenceSink;
+    use crate::io::{caps, ChannelCaps, IoOps, ReadOutcome, RxToken};
+    use crate::policy::FlushPolicy;
+    use spark_core::context::Context as BizContext;
+
+    #[derive(Default)]
+    struct NoopSvc;
+
+    #[allow(async_fn_in_trait)]
+    impl Service<Bytes> for NoopSvc {
+        type Response = Option<Bytes>;
+        type Error = KernelError;
+
+        async fn call(
+            &self,
+            _context: BizContext,
+            _request: Bytes,
+        ) -> core::result::Result<Self::Response, Self::Error> {
+            Ok(None)
+        }
+    }
+
+    struct NoopIo;
+    impl IoOps for NoopIo {
+        fn capabilities(&self) -> ChannelCaps {
+            caps::STREAM
+        }
+        fn try_read_lease(&mut self) -> Result<ReadOutcome> {
+            Err(KernelError::WouldBlock)
+        }
+        fn try_read_into(&mut self, _dst: &mut [u8]) -> Result<ReadOutcome> {
+            Err(KernelError::WouldBlock)
+        }
+        fn try_write(&mut self, src: &[u8]) -> Result<usize> {
+            Ok(src.len())
+        }
+        fn flush(&mut self) -> Result<()> {
+            Ok(())
+        }
+        fn close(&mut self) -> Result<()> {
+            Ok(())
+        }
+        fn rx_ptr_len(&mut self, _tok: RxToken) -> Option<(*const u8, usize)> {
+            None
+        }
+        fn release_rx(&mut self, _tok: RxToken) {}
+    }
+    impl DynChannel for NoopIo {
+        fn as_any_mut(&mut self) -> &mut dyn std::any::Any {
+            self
+        }
+    }
+
+    #[derive(Default)]
+    struct TestCtx {
+        exception_count: usize,
+        close_count: usize,
+        backpressure_false: usize,
+    }
+    impl<A> ChannelHandlerContext<A> for TestCtx {
+        fn fire_channel_active(&mut self) -> Result<()> {
+            Ok(())
+        }
+        fn fire_channel_inactive(&mut self) -> Result<()> {
+            Ok(())
+        }
+        fn fire_channel_read_raw(
+            &mut self,
+            _boundary: crate::io::MsgBoundary,
+            _bytes: Bytes,
+        ) -> Result<()> {
+            Ok(())
+        }
+        fn fire_channel_read(&mut self, _msg: Bytes) -> Result<()> {
+            Ok(())
+        }
+        fn fire_channel_read_complete(&mut self) -> Result<()> {
+            Ok(())
+        }
+        fn fire_exception_caught(&mut self, _err: KernelError) -> Result<()> {
+            self.exception_count += 1;
+            Ok(())
+        }
+        fn fire_channel_writability_changed(&mut self, is_writable: bool) -> Result<()> {
+            if !is_writable {
+                self.backpressure_false += 1;
+            }
+            Ok(())
+        }
+        fn fire_app_complete(
+            &mut self,
+            _result: core::result::Result<Option<Bytes>, KernelError>,
+        ) -> Result<()> {
+            Ok(())
+        }
+        fn write(&mut self, _msg: OutboundFrame) -> Result<()> {
+            Ok(())
+        }
+        fn flush(&mut self) -> Result<()> {
+            Ok(())
+        }
+        fn close(&mut self) -> Result<()> {
+            self.close_count += 1;
+            Ok(())
+        }
+    }
+
+    fn state() -> ChannelState<NoopEvidenceSink, NoopIo> {
+        ChannelState::new(
+            1,
+            NoopIo,
+            1024,
+            512,
+            usize::MAX,
+            FlushPolicy::default().budget(1024),
+            NoopEvidenceSink,
+        )
+    }
+
+    #[test]
+    fn queue_upper_bound_enforced_with_fail_fast() {
+        let app = Arc::new(NoopSvc);
+        let opts = AppServiceOptions {
+            max_inflight_per_connection: 1,
+            max_queue_per_connection: 1,
+            overload_action: OverloadAction::FailFast,
+        };
+        let mut h = AppServiceHandler::new(app, opts);
+        let mut ctx = TestCtx::default();
+        let mut st = state();
+
+        let _ = h.channel_read(&mut ctx, &mut st, Bytes::from_static(b"a"));
+        let _ = h.channel_read(&mut ctx, &mut st, Bytes::from_static(b"b"));
+        let _ = h.channel_read(&mut ctx, &mut st, Bytes::from_static(b"c"));
+
+        assert_eq!(ctx.exception_count, 1);
+    }
+
+    #[test]
+    fn overload_backpressure_signal_emitted() {
+        let app = Arc::new(NoopSvc);
+        let opts = AppServiceOptions {
+            max_inflight_per_connection: 1,
+            max_queue_per_connection: 0,
+            overload_action: OverloadAction::Backpressure,
+        };
+        let mut h = AppServiceHandler::new(app, opts);
+        let mut ctx = TestCtx::default();
+        let mut st = state();
+
+        let _ = h.channel_read(&mut ctx, &mut st, Bytes::from_static(b"a"));
+        let _ = h.channel_read(&mut ctx, &mut st, Bytes::from_static(b"b"));
+
+        assert_eq!(ctx.backpressure_false, 1);
+    }
+
+    #[test]
+    fn overload_can_close_connection() {
+        let app = Arc::new(NoopSvc);
+        let opts = AppServiceOptions {
+            max_inflight_per_connection: 1,
+            max_queue_per_connection: 0,
+            overload_action: OverloadAction::CloseConnection,
+        };
+        let mut h = AppServiceHandler::new(app, opts);
+        let mut ctx = TestCtx::default();
+        let mut st = state();
+
+        let _ = h.channel_read(&mut ctx, &mut st, Bytes::from_static(b"a"));
+        let _ = h.channel_read(&mut ctx, &mut st, Bytes::from_static(b"b"));
+
+        assert_eq!(ctx.close_count, 1);
     }
 }
