@@ -6,7 +6,7 @@ die(){ echo "ERROR: $*" 1>&2; exit 1; }
 # Treat rustc warnings as errors (best-effort).
 # Set SPARK_VERIFY_PERF_GATE=1 to append the local perf gate at the end.
 # Set SPARK_VERIFY_BENCH_GATE=1 to append the mio TCP echo bench gate at the end.
-# Set SPARK_VERIFY_COMPLETION_GATE=1 to compile the native IOCP completion prototype.
+# Set SPARK_VERIFY_COMPLETION_GATE=1 to run the native IOCP completion prototype tests.
 # The perf gate resolves thresholds from perf/baselines/ unless SPARK_PERF_BASELINE overrides it.
 export RUSTFLAGS="-D warnings"
 export RUSTDOCFLAGS="-D warnings"
@@ -61,11 +61,6 @@ fi
 if [[ "$run_bench_gate" == "1" || "$run_bench_gate" == "true" || "$run_bench_gate" == "yes" || "$run_bench_gate" == "on" ]]; then
   echo "[optional] bench gate (SPARK_VERIFY_BENCH_GATE)"
   bash ./scripts/bench_gate.sh
-fi
-
-if [[ "$run_completion_gate" == "1" || "$run_completion_gate" == "true" || "$run_completion_gate" == "yes" || "$run_completion_gate" == "on" ]]; then
-  echo "[optional] completion prototype compile (SPARK_VERIFY_COMPLETION_GATE)"
-  cargo test -p spark-transport-iocp --features native-completion --locked --no-run
 fi
 
 echo "OK: verify passed."

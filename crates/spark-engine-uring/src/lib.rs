@@ -1,6 +1,6 @@
 //! Runtime engine implementations.
 //!
-//! `spark-engine-uring` will eventually host the production-grade `io_uring` reactor
+//! `spark-engine-uring` will eventually host an `io_uring` reactor
 //! and executors.
 //!
 //! For now, we provide a **LocalEngine** (in-memory reactor/executor) that is useful
