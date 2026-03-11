@@ -1,0 +1,32 @@
+{
+  "profile": "windows",
+  "platform_note": "Windows baseline is explicit and separate from Unix to avoid overfitting Linux-only numbers.",
+  "scenarios": [
+    {
+      "scenario": "small_packet_high_freq",
+      "min": { "throughput_rps": 700.0, "writev_share": 0.3 },
+      "max": { "p99_us": 100000, "syscalls_per_kib": 1.8, "copy_per_byte": 2.0 }
+    },
+    {
+      "scenario": "large_packet_streaming",
+      "min": { "throughput_rps": 120.0, "writev_share": 0.3 },
+      "max": { "p99_us": 150000, "syscalls_per_kib": 1.8, "copy_per_byte": 2.0 }
+    },
+    {
+      "scenario": "slow_consumer",
+      "min": { "throughput_rps": 15.0 },
+      "max": { "p99_us": 700000, "copy_per_byte": 2.0 }
+    },
+    {
+      "scenario": "high_concurrency_short_conn",
+      "min": { "throughput_rps": 800.0, "writev_share": 0.25 },
+      "max": { "p99_us": 150000, "syscalls_per_kib": 1.8, "copy_per_byte": 2.0 }
+    }
+  ],
+  "global": {
+    "max": {
+      "peak_inflight_buffer_bytes": 67108864,
+      "alloc_count": 128
+    }
+  }
+}

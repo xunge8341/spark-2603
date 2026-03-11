@@ -1,0 +1,32 @@
+{
+  "profile": "default",
+  "platform_note": "Cross-platform conservative baseline; tune with host-class evidence.",
+  "scenarios": [
+    {
+      "scenario": "small_packet_high_freq",
+      "min": { "throughput_rps": 800.0, "writev_share": 0.4 },
+      "max": { "p99_us": 80000, "syscalls_per_kib": 1.5, "copy_per_byte": 2.0 }
+    },
+    {
+      "scenario": "large_packet_streaming",
+      "min": { "throughput_rps": 150.0, "writev_share": 0.4 },
+      "max": { "p99_us": 120000, "syscalls_per_kib": 1.5, "copy_per_byte": 2.0 }
+    },
+    {
+      "scenario": "slow_consumer",
+      "min": { "throughput_rps": 20.0 },
+      "max": { "p99_us": 500000, "copy_per_byte": 2.0 }
+    },
+    {
+      "scenario": "high_concurrency_short_conn",
+      "min": { "throughput_rps": 1000.0, "writev_share": 0.3 },
+      "max": { "p99_us": 100000, "syscalls_per_kib": 1.5, "copy_per_byte": 2.0 }
+    }
+  ],
+  "global": {
+    "max": {
+      "peak_inflight_buffer_bytes": 67108864,
+      "alloc_count": 128
+    }
+  }
+}

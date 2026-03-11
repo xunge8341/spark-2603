@@ -109,3 +109,26 @@
 - 绝不覆盖：`bind`、`max_accept_per_tick(backlog)`、`max_channels`、`framing`、`drain_timeout`、`max_pending_write_bytes`。
 
 > 说明：debug 文本格式不作为 contract；稳定 struct 才是序列化/比对基线。
+
+## Perf Gate Report Contract（T4）
+
+`scripts/perf_report.sh` 输出 `benchmark/reports/perf_report.json`，字段口径如下：
+
+- Scenario 级（每个场景一条）
+  - `scenario`: 场景名（`small_packet_high_freq` / `large_packet_streaming` / `slow_consumer` / `high_concurrency_short_conn`）
+  - `throughput_rps`: 吞吐（请求/秒）
+  - `p50_us` / `p95_us` / `p99_us`: 端到端延迟分位（微秒）
+  - `syscalls_per_kib`: TX syscall 成本（越低越好）
+  - `writev_share`: batching 使用占比（越高越好）
+  - `copy_per_byte`: inbound copy 压力（越低越好）
+  - `backpressure_events`: backpressure 触发次数
+  - `peak_rss_kib`: 峰值 RSS（KiB；平台/工具不支持时为 `-1`）
+
+- Global 级
+  - `peak_inflight_buffer_bytes`: 出站 in-flight buffer 峰值（来自 `perf_baseline`）
+  - `alloc_count`: alloc 增长计数（当前取 `ob_q_growth`）
+  - `alloc_bytes`: 预留字段，当前可为空（`null`）
+
+说明：
+- 该 JSON 是 CI gate 的 machine-readable 单一事实来源；CSV 仅用于可视化和 diff 友好展示。
+- gate 必须同时检查吞吐与尾延迟（至少 `p99_us`），禁止“只测吞吐”。

@@ -636,3 +636,17 @@
 - 依据：
   - 对齐 ASP.NET Core/Kestrel 的治理能力等级（而非 API 同名）。
   - 保持 host/runtime 分层不破坏既有 driver kernel 契约与 transport 语义。
+
+## Iteration 16（T4）：Perf evidence chain + scenario gate baseline
+
+### Decision
+- Replace single-line local perf gate parsing with a production-style report contract:
+  - `scripts/perf_report.sh` produces JSON + CSV (`benchmark/reports/`)
+  - `scripts/perf_gate.sh` compares report to per-platform baseline JSON files.
+- Gate on both throughput and tail latency (p99) across multiple scenarios, plus syscall/batching/copy/backpressure and memory evidence (`peak_rss_kib`, `peak_inflight_buffer_bytes`).
+- Keep writev/batching/flush direction unchanged; focus on measurable evidence continuity.
+
+### Rationale
+- “Near C++ performance” must be continuously verifiable in CI, not a one-off narrative.
+- Multi-scenario baselines reduce overfitting to a single happy-path benchmark.
+- Platform-split baselines make tradeoffs explicit and prevent Linux-only numbers from becoming implicit global truth.

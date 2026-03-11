@@ -1,0 +1,32 @@
+{
+  "profile": "unix",
+  "platform_note": "Unix baseline; keep thresholds honest for shared CI hosts.",
+  "scenarios": [
+    {
+      "scenario": "small_packet_high_freq",
+      "min": { "throughput_rps": 1000.0, "writev_share": 0.5 },
+      "max": { "p99_us": 60000, "syscalls_per_kib": 1.2, "copy_per_byte": 1.5 }
+    },
+    {
+      "scenario": "large_packet_streaming",
+      "min": { "throughput_rps": 200.0, "writev_share": 0.5 },
+      "max": { "p99_us": 100000, "syscalls_per_kib": 1.2, "copy_per_byte": 1.5 }
+    },
+    {
+      "scenario": "slow_consumer",
+      "min": { "throughput_rps": 30.0 },
+      "max": { "p99_us": 450000, "copy_per_byte": 1.5 }
+    },
+    {
+      "scenario": "high_concurrency_short_conn",
+      "min": { "throughput_rps": 1200.0, "writev_share": 0.4 },
+      "max": { "p99_us": 85000, "syscalls_per_kib": 1.2, "copy_per_byte": 1.5 }
+    }
+  ],
+  "global": {
+    "max": {
+      "peak_inflight_buffer_bytes": 67108864,
+      "alloc_count": 128
+    }
+  }
+}
