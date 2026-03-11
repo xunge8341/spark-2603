@@ -7,7 +7,7 @@
 //! - **契约可测**：配合 `spark-transport-contract` 做一致性验证。
 //!
 //! ## 热路径原则（必须遵守）
-//! 
+//!
 //! 目标：防止“OOP 回潮”（反射/容器/运行时多态贯穿主干），保持可预测性能。
 //!
 //! - **禁止热路径 downcast**：`Any::downcast_*` 只能出现在测试/诊断或叶子层后端边界（例如
@@ -28,15 +28,15 @@ pub use spark_uci::{Budget, KernelError, Result, RxToken, TaskToken};
 
 mod app;
 
-pub mod io;
-pub mod reactor;
 pub mod executor;
+pub mod io;
 pub mod policy;
+pub mod reactor;
 
 pub mod async_bridge;
+pub mod error_codes;
 pub mod evidence;
 pub mod lease;
-pub mod error_codes;
 pub mod metrics;
 pub mod slab;
 
@@ -49,6 +49,8 @@ pub use evidence::{CompositeEvidenceSink, EvidenceSink, NoopEvidenceSink};
 
 // Re-export commonly used types.
 pub use config::{
-    DataPlaneConfig, DataPlaneConfigError, DataPlaneDiagnostics, DataPlaneLimits, DataPlaneOptions,
+    DataPlaneConfig, DataPlaneConfigError, DataPlaneDiagnostics, DataPlaneEffectiveConfig,
+    DataPlaneLimits, DataPlaneOptions, DataPlanePerfOverlayBoundary, DataPlanePerfOverlayValues,
+    EffectiveFraming, EffectiveHttpLimits,
 };
 pub use metrics::{DataPlaneDerivedMetrics, DataPlaneMetrics, DataPlaneMetricsSnapshot};

@@ -11,6 +11,14 @@ pub struct ServerConfig {
     pub mgmt: MgmtTransportProfileV1,
 }
 
+/// Stable, runtime-auditable host effective config snapshot.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ServerEffectiveConfig {
+    pub mgmt_profile: crate::mgmt_profile::MgmtProfileEffectiveConfig,
+    pub management_transport: spark_transport::DataPlaneEffectiveConfig,
+    pub management_transport_perf_overlay: spark_transport::DataPlaneEffectiveConfig,
+}
+
 impl ServerConfig {
     /// Build a canonical mgmt-plane profile (v1).
     ///
@@ -123,6 +131,18 @@ impl ServerConfig {
     pub fn management_transport_perf_config(&self) -> DataPlaneConfig {
         self.mgmt.transport_perf_config()
     }
+
+    /// Build a stable, runtime-auditable host effective config snapshot.
+    #[inline]
+    pub fn describe_effective_config(&self) -> ServerEffectiveConfig {
+        ServerEffectiveConfig {
+            mgmt_profile: self.mgmt.describe_effective_config(),
+            management_transport: self.management_transport_config().describe_effective(),
+            management_transport_perf_overlay: self
+                .management_transport_perf_config()
+                .describe_effective(),
+        }
+    }
 }
 
 impl Default for ServerConfig {
@@ -202,5 +222,47 @@ mod tests {
         assert_eq!(dp.watermark.high_mul, 16);
         assert_eq!(dp.budget.max_events, 512);
         assert!(dp.validate().is_ok());
+    }
+
+    #[test]
+    fn server_describe_effective_config_explains_default_and_perf() {
+        let cfg = ServerConfig::default()
+            .with_mgmt_addr("127.0.0.1:29090".parse().expect("static addr"))
+            .with_max_request_bytes(8 * 1024)
+            .with_mgmt_max_channels(128)
+            .with_mgmt_max_accept_per_tick(9);
+
+        let effective = cfg.describe_effective_config();
+        assert_eq!(effective.mgmt_profile.bind, cfg.mgmt.bind);
+        assert_eq!(effective.management_transport.bind, cfg.mgmt.bind);
+        assert_eq!(effective.management_transport.max_channels, 128);
+        assert_eq!(effective.management_transport.backlog, 9);
+        assert_eq!(
+            effective.management_transport.max_frame_hint,
+            effective.mgmt_profile.effective_max_request_bytes
+        );
+        assert_eq!(
+            effective.management_transport_perf_overlay.bind,
+            cfg.mgmt.bind
+        );
+        assert_eq!(
+            effective.management_transport_perf_overlay.max_channels,
+            128
+        );
+        assert_eq!(effective.management_transport_perf_overlay.backlog, 9);
+        assert_eq!(
+            effective
+                .management_transport_perf_overlay
+                .flush_policy
+                .max_syscalls,
+            64
+        );
+        assert_eq!(
+            effective
+                .management_transport_perf_overlay
+                .budget
+                .max_events,
+            512
+        );
     }
 }

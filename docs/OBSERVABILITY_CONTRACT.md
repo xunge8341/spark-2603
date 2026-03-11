@@ -89,3 +89,23 @@
 
 - `spark-transport-contract` 的 P0 suite 会断言关键 EvidenceEvent name。
 - Perf gate 会用 `DataPlaneMetricsSnapshot::derive()` 输出派生指标（syscalls/KB, writev share, copy/byte）。
+
+## Effective Config（P1: 审计快照 contract）
+
+为避免多模块手工拼接文本，effective config 以稳定结构体为主 contract：
+
+- transport：`DataPlaneConfig::describe_effective()` / `DataPlaneOptions::describe_effective()`
+  - 输出 `DataPlaneEffectiveConfig`（bind/backlog/budget、watermark、flush policy、hard cap、framing、max_frame_hint）。
+  - 若 framing 为 HTTP/1，则包含 `EffectiveHttpLimits { max_request_bytes, max_head_bytes, max_headers }`。
+- host/mgmt：
+  - `MgmtTransportProfileV1::describe_effective_config()` → `MgmtProfileEffectiveConfig`
+  - `ServerConfig::describe_effective_config()` → 同时包含 default transport 与 perf overlay transport 的 effective 快照。
+
+### Perf overlay 覆盖边界（冻结）
+
+由 `DataPlaneConfig::perf_overlay_boundary()` 明确表达：
+
+- 仅允许覆盖：`watermark`、`flush_policy`、`budget`、`emit_evidence_log`。
+- 绝不覆盖：`bind`、`max_accept_per_tick(backlog)`、`max_channels`、`framing`、`drain_timeout`、`max_pending_write_bytes`。
+
+> 说明：debug 文本格式不作为 contract；稳定 struct 才是序列化/比对基线。

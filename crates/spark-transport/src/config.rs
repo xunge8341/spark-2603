@@ -4,6 +4,73 @@ use crate::Budget;
 use std::net::SocketAddr;
 use std::time::Duration;
 
+/// HTTP limits when the framing profile is [`FrameDecoderProfile::Http1`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct EffectiveHttpLimits {
+    pub max_request_bytes: usize,
+    pub max_head_bytes: usize,
+    pub max_headers: usize,
+}
+
+/// Effective framing description.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum EffectiveFraming {
+    Line {
+        max_frame: usize,
+    },
+    Delimiter {
+        max_frame: usize,
+        include_delimiter: bool,
+    },
+    LengthField {
+        max_frame: usize,
+        field_len: u8,
+    },
+    Varint32 {
+        max_frame: usize,
+    },
+    Http1 {
+        limits: EffectiveHttpLimits,
+    },
+}
+
+/// Stable, runtime-auditable effective dataplane config snapshot.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct DataPlaneEffectiveConfig {
+    pub bind: SocketAddr,
+    pub backlog: usize,
+    pub max_channels: usize,
+    pub budget: Budget,
+    pub watermark: WatermarkPolicy,
+    pub flush_policy: FlushPolicy,
+    pub framing: EffectiveFraming,
+    pub max_frame_hint: usize,
+    pub drain_timeout: Duration,
+    pub max_pending_write_bytes: usize,
+    pub emit_evidence_log: bool,
+}
+
+/// Effective values changed by `with_perf_defaults()`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct DataPlanePerfOverlayValues {
+    pub watermark: WatermarkPolicy,
+    pub flush_policy: FlushPolicy,
+    pub budget: Budget,
+    pub emit_evidence_log: bool,
+}
+
+/// Explicit contract boundary for the perf overlay.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct DataPlanePerfOverlayBoundary {
+    pub overlay_fields: DataPlanePerfOverlayValues,
+    pub keeps_bind: bool,
+    pub keeps_backlog: bool,
+    pub keeps_max_channels: bool,
+    pub keeps_framing: bool,
+    pub keeps_drain_timeout: bool,
+    pub keeps_max_pending_write_bytes: bool,
+}
+
 /// Dataplane sizing/capacity knobs.
 ///
 /// This is the smallest “day-1” subset we want most users to care about:
@@ -148,29 +215,23 @@ impl DataPlaneOptions {
         self.normalized().into()
     }
 
+    /// Build a stable, runtime-auditable effective config snapshot.
+    #[inline]
+    pub fn describe_effective(&self) -> DataPlaneEffectiveConfig {
+        self.clone().build().describe_effective()
+    }
+
     /// Apply a conservative throughput-oriented tuning overlay.
     ///
     /// This keeps bind/framing/limits intact while increasing flush and reactor budgets enough for
     /// local perf bring-up and coarse regression checks.
     #[inline]
     pub fn with_perf_defaults(mut self) -> Self {
-        self.watermark = WatermarkPolicy {
-            min_frame: 4 * 1024,
-            high_mul: 16,
-            low_mul: 8,
-        };
-        self.flush_policy = FlushPolicy {
-            min_frame: 64 * 1024,
-            max_bytes_mul: 64,
-            max_bytes_cap: 64 * 1024 * 1024,
-            max_syscalls: 64,
-            max_iov: 16,
-        };
-        self.budget = Budget {
-            max_events: 512,
-            max_nanos: 4_000_000,
-        };
-        self.diagnostics.emit_evidence_log = false;
+        let overlay = DataPlaneConfig::perf_overlay_boundary().overlay_fields;
+        self.watermark = overlay.watermark;
+        self.flush_policy = overlay.flush_policy;
+        self.budget = overlay.budget;
+        self.diagnostics.emit_evidence_log = overlay.emit_evidence_log;
         self
     }
 
@@ -357,29 +418,71 @@ impl DataPlaneConfig {
         self.framing.max_frame_hint().max(1)
     }
 
+    /// Build a stable, runtime-auditable effective config snapshot.
+    #[inline]
+    pub fn describe_effective(&self) -> DataPlaneEffectiveConfig {
+        let normalized = self.clone().normalized();
+        DataPlaneEffectiveConfig {
+            bind: normalized.bind,
+            backlog: normalized.max_accept_per_tick,
+            max_channels: normalized.max_channels,
+            budget: normalized.budget,
+            watermark: normalized.watermark,
+            flush_policy: normalized.flush_policy,
+            framing: EffectiveFraming::from(normalized.framing),
+            max_frame_hint: normalized.max_frame_hint(),
+            drain_timeout: normalized.drain_timeout,
+            max_pending_write_bytes: normalized.max_pending_write_bytes,
+            emit_evidence_log: normalized.emit_evidence_log,
+        }
+    }
+
+    /// Explicit perf overlay contract boundary.
+    ///
+    /// `with_perf_defaults()` only changes `overlay_fields`; all `keeps_*` fields are guaranteed
+    /// to remain identical to the input config.
+    #[inline]
+    pub fn perf_overlay_boundary() -> DataPlanePerfOverlayBoundary {
+        DataPlanePerfOverlayBoundary {
+            overlay_fields: DataPlanePerfOverlayValues {
+                watermark: WatermarkPolicy {
+                    min_frame: 4 * 1024,
+                    high_mul: 16,
+                    low_mul: 8,
+                },
+                flush_policy: FlushPolicy {
+                    min_frame: 64 * 1024,
+                    max_bytes_mul: 64,
+                    max_bytes_cap: 64 * 1024 * 1024,
+                    max_syscalls: 64,
+                    max_iov: 16,
+                },
+                budget: Budget {
+                    max_events: 512,
+                    max_nanos: 4_000_000,
+                },
+                emit_evidence_log: false,
+            },
+            keeps_bind: true,
+            keeps_backlog: true,
+            keeps_max_channels: true,
+            keeps_framing: true,
+            keeps_drain_timeout: true,
+            keeps_max_pending_write_bytes: true,
+        }
+    }
+
     /// Apply a conservative throughput-oriented tuning overlay.
     ///
     /// This keeps bind/framing/limits intact while increasing flush and reactor budgets enough for
     /// local perf bring-up and coarse regression checks.
     #[inline]
     pub fn with_perf_defaults(mut self) -> Self {
-        self.watermark = WatermarkPolicy {
-            min_frame: 4 * 1024,
-            high_mul: 16,
-            low_mul: 8,
-        };
-        self.flush_policy = FlushPolicy {
-            min_frame: 64 * 1024,
-            max_bytes_mul: 64,
-            max_bytes_cap: 64 * 1024 * 1024,
-            max_syscalls: 64,
-            max_iov: 16,
-        };
-        self.budget = Budget {
-            max_events: 512,
-            max_nanos: 4_000_000,
-        };
-        self.emit_evidence_log = false;
+        let overlay = Self::perf_overlay_boundary().overlay_fields;
+        self.watermark = overlay.watermark;
+        self.flush_policy = overlay.flush_policy;
+        self.budget = overlay.budget;
+        self.emit_evidence_log = overlay.emit_evidence_log;
         self
     }
 
@@ -454,6 +557,43 @@ impl DataPlaneConfig {
     }
 }
 
+impl From<FrameDecoderProfile> for EffectiveFraming {
+    #[inline]
+    fn from(value: FrameDecoderProfile) -> Self {
+        match value {
+            FrameDecoderProfile::Line { max_frame } => Self::Line { max_frame },
+            FrameDecoderProfile::Delimiter {
+                max_frame,
+                include_delimiter,
+                ..
+            } => Self::Delimiter {
+                max_frame,
+                include_delimiter,
+            },
+            FrameDecoderProfile::LengthField {
+                max_frame,
+                field_len,
+                ..
+            } => Self::LengthField {
+                max_frame,
+                field_len,
+            },
+            FrameDecoderProfile::Varint32 { max_frame } => Self::Varint32 { max_frame },
+            FrameDecoderProfile::Http1 {
+                max_request_bytes,
+                max_head_bytes,
+                max_headers,
+            } => Self::Http1 {
+                limits: EffectiveHttpLimits {
+                    max_request_bytes,
+                    max_head_bytes,
+                    max_headers,
+                },
+            },
+        }
+    }
+}
+
 impl Default for DataPlaneConfig {
     fn default() -> Self {
         Self {
@@ -517,7 +657,7 @@ impl From<DataPlaneConfig> for DataPlaneOptions {
 
 #[cfg(test)]
 mod tests {
-    use super::{DataPlaneConfig, DataPlaneConfigError, DataPlaneOptions};
+    use super::{DataPlaneConfig, DataPlaneConfigError, DataPlaneOptions, EffectiveFraming};
     use crate::async_bridge::FrameDecoderProfile;
     use crate::policy::{FlushPolicy, WatermarkPolicy};
     use std::time::Duration;
@@ -605,5 +745,66 @@ mod tests {
             DataPlaneOptions::perf_tcp(bind).build(),
             DataPlaneConfig::perf_tcp(bind)
         );
+    }
+
+    #[test]
+    fn dataplane_describe_effective_http_limits_are_stable() {
+        let cfg = DataPlaneOptions::management_http_with_limits(
+            "127.0.0.1:0".parse().expect("addr"),
+            8192,
+            4096,
+            16,
+        )
+        .with_max_accept_per_tick(13)
+        .build();
+
+        let snapshot = cfg.describe_effective();
+        assert_eq!(snapshot.backlog, 13);
+        assert_eq!(snapshot.max_frame_hint, 8192);
+        match snapshot.framing {
+            EffectiveFraming::Http1 { limits } => {
+                assert_eq!(limits.max_request_bytes, 8192);
+                assert_eq!(limits.max_head_bytes, 4096);
+                assert_eq!(limits.max_headers, 16);
+            }
+            other => panic!("expected Http1 framing, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn dataplane_perf_overlay_boundary_matches_runtime_effect() {
+        let cfg = DataPlaneConfig::management_http_with_limits(
+            "127.0.0.1:0".parse().expect("addr"),
+            4096,
+            2048,
+            8,
+        )
+        .with_max_channels(99)
+        .with_max_accept_per_tick(3)
+        .with_drain_timeout(Duration::from_secs(9))
+        .with_max_pending_write_bytes(777)
+        .with_evidence_log(true);
+
+        let boundary = DataPlaneConfig::perf_overlay_boundary();
+        let perf = cfg.clone().with_perf_defaults();
+        assert_eq!(perf.watermark, boundary.overlay_fields.watermark);
+        assert_eq!(perf.flush_policy, boundary.overlay_fields.flush_policy);
+        assert_eq!(perf.budget, boundary.overlay_fields.budget);
+        assert_eq!(
+            perf.emit_evidence_log,
+            boundary.overlay_fields.emit_evidence_log
+        );
+        assert_eq!(perf.bind, cfg.bind);
+        assert_eq!(perf.max_channels, cfg.max_channels);
+        assert_eq!(perf.max_accept_per_tick, cfg.max_accept_per_tick);
+        assert_eq!(perf.framing, cfg.framing);
+        assert_eq!(perf.drain_timeout, cfg.drain_timeout);
+        assert_eq!(perf.max_pending_write_bytes, cfg.max_pending_write_bytes);
+        assert!(boundary.keeps_bind);
+        assert!(boundary.keeps_backlog);
+        assert!(boundary.keeps_max_channels);
+        assert!(boundary.keeps_framing);
+        assert!(boundary.keeps_drain_timeout);
+        assert!(boundary.keeps_max_pending_write_bytes);
     }
 }
