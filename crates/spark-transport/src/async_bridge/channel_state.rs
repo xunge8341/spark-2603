@@ -556,15 +556,9 @@ where
         match self.io.try_read_lease() {
             Ok(outcome) => match outcome.data {
                 ReadData::Token(rx) => {
-                    if outcome.boundary == MsgBoundary::None {
-                        self.with_stream_token(rx, |state, chunk| {
-                            f(state, MsgBoundary::None, chunk)
-                        })
-                    } else {
-                        let bytes = materialize_rx_token(&mut self.io, rx)?;
-                        self.record_rx_materialize_bytes(bytes.len());
-                        f(self, outcome.boundary, ReadChunk::Owned(bytes))
-                    }
+                    let bytes = materialize_rx_token(&mut self.io, rx)?;
+                    self.record_rx_materialize_bytes(bytes.len());
+                    f(self, outcome.boundary, ReadChunk::Owned(bytes))
                 }
                 ReadData::Copied => {
                     // Contract: `try_read_lease()` must never return `Copied`.
@@ -589,54 +583,6 @@ where
             }
             Err(e) => Err(e),
         }
-    }
-
-    fn with_stream_token<R, F>(&mut self, tok: RxToken, f: F) -> Result<R>
-    where
-        F: FnOnce(&mut Self, ReadChunk<'_>) -> Result<R>,
-    {
-        struct RxTokenGuard<Io: DynChannel> {
-            chan: *mut Io,
-            tok: RxToken,
-        }
-
-        impl<Io: DynChannel> Drop for RxTokenGuard<Io> {
-            fn drop(&mut self) {
-                // SAFETY:
-                // - `chan` originates from `&mut self.io` in this function.
-                // - The guard never escapes this stack frame.
-                // - `drop` runs exactly once, after `f` returns, so release remains structural.
-                unsafe { (&mut *self.chan).release_rx(self.tok) };
-            }
-        }
-
-        let Some((ptr, len)) = self.io.rx_ptr_len(tok) else {
-            return Err(KernelError::Internal(
-                crate::error_codes::ERR_RX_PTR_LEN_NONE,
-            ));
-        };
-
-        // SAFETY:
-        // - `rx_ptr_len(tok)` guarantees ptr..ptr+len remains valid until `release_rx(tok)`.
-        // - `guard` keeps the token alive for the full duration of `f`.
-        // - We only expose the slice to the current call; it is never stored in ChannelState.
-        let bytes = unsafe { std::slice::from_raw_parts(ptr, len) };
-        let guard = RxTokenGuard {
-            chan: &mut self.io as *mut Io,
-            tok,
-        };
-        self.record_rx_lease_borrowed(bytes.len());
-        let result = f(self, ReadChunk::Borrowed(bytes));
-        drop(guard);
-        result
-    }
-
-    #[inline]
-    fn record_rx_lease_borrowed(&mut self, bytes: usize) {
-        self.rx_lease_tokens_acc = self.rx_lease_tokens_acc.saturating_add(1);
-        self.rx_lease_borrowed_bytes_acc = self
-            .rx_lease_borrowed_bytes_acc
-            .saturating_add(bytes as u64);
     }
 
     #[inline]

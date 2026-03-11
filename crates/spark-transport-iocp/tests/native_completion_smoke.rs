@@ -23,9 +23,13 @@ fn native_completion_port_can_be_created_and_polled() {
     let mut rx = IocpCompletionReactor::new().expect("create iocp completion port");
 
     // Poll with 0ns timeout; should return quickly with 0 events.
-    let budget = Budget { max_events: 8, max_nanos: 0 };
+    let budget = Budget {
+        max_events: 8,
+        max_nanos: 0,
+    };
     let mut out: [MaybeUninit<CompletionEvent>; 8] = [MaybeUninit::uninit(); 8];
-    let n = CompletionReactor::poll_completions(&mut rx, budget, &mut out).expect("poll completions");
+    let n =
+        CompletionReactor::poll_completions(&mut rx, budget, &mut out).expect("poll completions");
     assert_eq!(n, 0);
 }
 
@@ -39,15 +43,27 @@ fn native_completion_posted_packets_roundtrip_explicit_events() {
     rx.post(ev_ok).expect("post ok completion");
     rx.post(ev_err).expect("post err completion");
 
-    let budget = Budget { max_events: 8, max_nanos: 0 };
+    let budget = Budget {
+        max_events: 8,
+        max_nanos: 0,
+    };
     let mut out: [MaybeUninit<CompletionEvent>; 8] = [MaybeUninit::uninit(); 8];
-    let n = CompletionReactor::poll_completions(&mut rx, budget, &mut out).expect("poll completions");
+    let n =
+        CompletionReactor::poll_completions(&mut rx, budget, &mut out).expect("poll completions");
     assert_eq!(n, 2);
 
+    // SAFETY: `poll_completions` returned `n == 2`, so the first two slots are initialized.
     let first = unsafe { out[0].assume_init() };
+    // SAFETY: same invariant as above for the second initialized slot.
     let second = unsafe { out[1].assume_init() };
 
     let pair = [first, second];
-    assert!(pair.iter().any(|ev| *ev == ev_ok), "missing posted ok completion: {pair:?}");
-    assert!(pair.iter().any(|ev| *ev == ev_err), "missing posted err completion: {pair:?}");
+    assert!(
+        pair.iter().any(|ev| *ev == ev_ok),
+        "missing posted ok completion: {pair:?}"
+    );
+    assert!(
+        pair.iter().any(|ev| *ev == ev_err),
+        "missing posted err completion: {pair:?}"
+    );
 }

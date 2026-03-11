@@ -136,6 +136,7 @@ impl DynChannel for MemStreamChannel {
 // ---------------- tiny poll helper ----------------
 
 fn noop_waker() -> Waker {
+    // SAFETY: test-only no-op RawWaker vtable; data pointer is never dereferenced.
     unsafe fn clone(_: *const ()) -> RawWaker {
         RawWaker::new(core::ptr::null(), &VTABLE)
     }
@@ -144,6 +145,7 @@ fn noop_waker() -> Waker {
     unsafe fn drop(_: *const ()) {}
 
     static VTABLE: RawWakerVTable = RawWakerVTable::new(clone, wake, wake_by_ref, drop);
+    // SAFETY: `VTABLE` satisfies RawWaker contract for this test no-op waker implementation.
     unsafe { Waker::from_raw(RawWaker::new(core::ptr::null(), &VTABLE)) }
 }
 

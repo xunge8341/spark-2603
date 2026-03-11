@@ -41,3 +41,12 @@ This document is the trunk baseline. It must match code and verification scripts
 
 ## Known blocking risk
 - Windows mio `write_pressure_smoke` forward-progress stall remains open and is tracked in `docs/KNOWN_ISSUES.md`.
+
+## Update 2026-03-11 (T1 unsafe 治理收敛)
+
+- `async_bridge/channel_state.rs` 已移除 stream token 借用 fast-path，统一走 `materialize_rx_token`，消除了该文件中的全部 `unsafe`。
+- `unsafe` 治理从“限定模块”升级为“全 crates 台账 + 脚本同步”机制：`docs/UNSAFE_REGISTRY.md` + `scripts/unsafe_audit.sh`。
+- `unsafe_audit.sh` 现强制：
+  - 每个 `unsafe` 前必须有 `SAFETY:` 注释；
+  - `crates/` 中每个含 `unsafe` 文件必须在台账中登记；
+  - 台账不能有失效条目（代码已无 unsafe 但文档仍保留）。

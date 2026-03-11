@@ -16,10 +16,6 @@ pub fn find_byte(haystack: &[u8], needle: u8) -> Option<usize> {
     // 64-bit little-endian fast path.
     #[cfg(all(target_pointer_width = "64", target_endian = "little"))]
     {
-        // Safety:
-        // - We only read within `0..len`.
-        // - We use `read_unaligned`, so no alignment requirements.
-        // - The algorithm is endian-sensitive; guarded by `target_endian = "little"`.
         use core::ptr;
 
         const REPEAT: u64 = 0x0101_0101_0101_0101;
@@ -31,6 +27,7 @@ pub fn find_byte(haystack: &[u8], needle: u8) -> Option<usize> {
 
         let mut i = 0usize;
         while i + 8 <= len {
+            // SAFETY: `i + 8 <= len` keeps the read in-bounds and `read_unaligned` removes alignment requirements.
             let chunk = unsafe { ptr::read_unaligned(ptr.add(i) as *const u64) };
             let x = chunk ^ needle64;
             // Detect zero bytes in `x`.

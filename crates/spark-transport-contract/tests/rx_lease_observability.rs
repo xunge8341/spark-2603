@@ -49,6 +49,7 @@ impl Service<Bytes> for ErrorService {
 }
 
 fn noop_waker() -> Waker {
+    // SAFETY: test-only no-op RawWaker vtable; data pointer is never dereferenced.
     unsafe fn clone(_: *const ()) -> RawWaker {
         RawWaker::new(core::ptr::null(), &VTABLE)
     }
@@ -57,6 +58,7 @@ fn noop_waker() -> Waker {
     unsafe fn drop(_: *const ()) {}
 
     static VTABLE: RawWakerVTable = RawWakerVTable::new(clone, wake, wake_by_ref, drop);
+    // SAFETY: `VTABLE` satisfies RawWaker contract for this test no-op waker implementation.
     unsafe { Waker::from_raw(RawWaker::new(core::ptr::null(), &VTABLE)) }
 }
 
@@ -216,9 +218,9 @@ fn leased_stream_counts_and_releases_once() {
     ) = ch.on_readable(&mut read_buf, 8).expect("on_readable");
 
     assert_eq!(read_bytes, 5);
-    assert_eq!(lease_tokens, 1);
-    assert_eq!(lease_borrowed, 5);
-    assert_eq!(materialize, 0);
+    assert_eq!(lease_tokens, 0);
+    assert_eq!(lease_borrowed, 0);
+    assert_eq!(materialize, 5);
     assert_eq!(cumulation_copy_bytes, 5);
 
     if let Some(mut fut) = ch.take_app_future() {

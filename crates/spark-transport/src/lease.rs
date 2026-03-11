@@ -1,6 +1,6 @@
+use crate::{KernelError, Result, RxToken};
 use core::marker::PhantomData;
 use std::rc::Rc;
-use crate::{KernelError, Result, RxToken};
 
 /// Registry responsible for mapping `RxToken` to a borrowed buffer view.
 pub trait LeaseRegistry {
@@ -50,7 +50,7 @@ impl<'a, LR: LeaseRegistry + ?Sized> RxLease<'a, LR> {
 
     #[inline]
     pub fn bytes(&self) -> &'a [u8] {
-        // Safety:
+        // SAFETY:
         // - `ptr..ptr+len` remains valid for reads until this lease is dropped;
         // - this is guaranteed by the `LeaseRegistry::borrow_rx` contract.
         unsafe { core::slice::from_raw_parts(self.ptr, self.len) }
@@ -64,7 +64,7 @@ impl<'a, LR: LeaseRegistry + ?Sized> RxLease<'a, LR> {
 
 /// Copy bytes from a raw `(ptr, len)` pair.
 ///
-/// # Safety model
+/// # SAFETY model
 ///
 /// This function assumes the pointer was obtained from a transport IO contract
 /// (`rx_ptr_len`, `try_read_lease`, etc.), which guarantees that `ptr..ptr+len`
@@ -77,13 +77,13 @@ impl<'a, LR: LeaseRegistry + ?Sized> RxLease<'a, LR> {
 /// - `tests::lease_drop_releases_exactly_once` ensures the token is released exactly once.
 #[inline]
 pub(crate) fn copy_from_parts(ptr: *const u8, len: usize) -> Vec<u8> {
-    // Safety: validity is guaranteed by the IO contract that produced `(ptr, len)`.
+    // SAFETY: validity is guaranteed by the IO contract that produced `(ptr, len)`.
     unsafe { core::slice::from_raw_parts(ptr, len) }.to_vec()
 }
 
 impl<'a, LR: LeaseRegistry + ?Sized> Drop for RxLease<'a, LR> {
     fn drop(&mut self) {
-        // Safety: `reg` points to a live registry for the entire lease lifetime.
+        // SAFETY: `reg` points to a live registry for the entire lease lifetime.
         unsafe { (*self.reg).release_rx(self.tok) }
     }
 }

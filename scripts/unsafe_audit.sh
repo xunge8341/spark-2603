@@ -3,21 +3,9 @@ set -euo pipefail
 
 die(){ echo "ERROR: $*" 1>&2; exit 1; }
 
-# Industrial-grade policy:
-# 1) In core `spark-transport`, unsafe must be confined to a small, auditable set of modules.
-# 2) Every `unsafe {}` block / `unsafe fn` item must be documented with a nearby `// SAFETY:` (or `// Safety:`) comment.
-# 3) Leaf backends (e.g., IOCP) may use unsafe, but still must document it.
+registry="docs/UNSAFE_REGISTRY.md"
+[ -f "$registry" ] || die "missing $registry"
 
-transport_root="crates/spark-transport/src"
-allow_transport_unsafe=(
-  "crates/spark-transport/src/lease.rs"
-  "crates/spark-transport/src/reactor/event_buf.rs"
-  "crates/spark-transport/src/async_bridge/channel_state.rs"
-)
-
-iocp_root="crates/spark-transport-iocp/src"
-
-# Note: we avoid grep's non-portable word-boundary escapes and instead use a conservative delimiter.
 unsafe_pat='(^|[^[:alnum:]_])unsafe[[:space:]]*(\{|fn)'
 
 scan_doc() {
@@ -28,7 +16,7 @@ scan_doc() {
       for (k=1;k<=N;k++) {
         j = idx - k;
         while (j < 0) j += N;
-        if (buf[j] ~ /\/\/[^\n]*(SAFETY|Safety):/) return 1;
+        if (buf[j] ~ /\/\/[^\n]*SAFETY:/) return 1;
       }
       return 0;
     }
@@ -46,30 +34,23 @@ scan_doc() {
   ' "$path"
 }
 
-# 1) Confinement: spark-transport must not grow unsafe surface area.
-unsafe_hits=$(grep -R --line-number -E "$unsafe_pat" "$transport_root" || true)
-if [ -n "$unsafe_hits" ]; then
-  bad="$unsafe_hits"
-  for ok in "${allow_transport_unsafe[@]}"; do
-    bad=$(echo "$bad" | grep -v -E "^${ok}:" || true)
-  done
-  if [ -n "$bad" ]; then
-    echo "$bad" | sed 's/^/UNSAFE FORBIDDEN: /'
-    die "unsafe must be confined to the audited transport modules (lease/event_buf/channel_state)"
-  fi
-fi
+mapfile -t unsafe_files < <(rg -n "$unsafe_pat" crates -g '*.rs' --no-heading | cut -d: -f1 | sort -u)
 
-# 2) Documentation: enforce SAFETY comments for the allowed unsafe modules.
-for f in "${allow_transport_unsafe[@]}"; do
-  [ -f "$f" ] || continue
+for f in "${unsafe_files[@]}"; do
   scan_doc "$f"
+  if ! rg -n "^## ${f}$" "$registry" >/dev/null; then
+    die "unsafe registry missing file entry: $f"
+  fi
 done
 
-# 3) Leaf IOCP backend: allow unsafe but require documentation.
-if [ -d "$iocp_root" ]; then
-  while IFS= read -r -d '' f; do
-    scan_doc "$f"
-  done < <(find "$iocp_root" -name '*.rs' -print0)
-fi
+mapfile -t registry_files < <(awk '/^## crates\// {print $2}' "$registry" | sort -u)
+for f in "${registry_files[@]}"; do
+  if [ ! -f "$f" ]; then
+    die "unsafe registry references missing file: $f"
+  fi
+  if ! printf '%s\n' "${unsafe_files[@]}" | rg -x "$f" >/dev/null; then
+    die "unsafe registry stale entry (no unsafe in file): $f"
+  fi
+done
 
-echo "OK: unsafe audit passed (confined + documented)."
+echo "OK: unsafe audit passed (documented + registry-synced)."
