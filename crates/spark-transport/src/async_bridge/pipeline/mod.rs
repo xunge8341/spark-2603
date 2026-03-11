@@ -1,10 +1,14 @@
 //! Netty/DotNetty 风格的 ChannelPipeline（bring-up 版本）。
 //!
-//! 设计目标：
-//! - 清晰表达 inbound/outbound 双向事件语义。
-//! - handler 默认“透传”（调用 ctx.fire_* / ctx.write / ctx.flush）。
-//! - 异步业务（Service/Future）不进入 handler 签名：由 `AppServiceHandler` 内部创建 future，
-//!   driver 负责 poll；这与 DotNetty 的工程经验一致（pipeline 同步、业务异步通过 Task 承载）。
+//! ## 稳定扩展面（public）
+//! - `ChannelPipelineBuilder`：组装 handler 链和 framing 选项。
+//! - `ChannelHandler`：自定义 inbound/outbound 处理逻辑。
+//! - `AppServiceOptions` / `OverloadAction`：每 handler/per protocol 并发与过载策略。
+//! - `FrameDecoderProfile` / `DelimiterSpec`：输入 framing 选择。
+//!
+//! ## internal（不承诺稳定）
+//! `head` / `tail` / `context` / `event` 等模块属于运行时实现细节，不应被上层直接依赖。
+//! `ChannelPipeline` 类型可通过本模块 re-export 使用，但其内部实现模块路径不视为稳定 contract。
 
 mod builder;
 mod channel_pipeline;
@@ -26,8 +30,8 @@ mod http1_inbound;
 pub(crate) type HandlerBox<A, Ev, Io> = Box<dyn handler::ChannelHandler<A, Ev, Io>>;
 pub(crate) type HandlerVec<A, Ev, Io> = Vec<HandlerBox<A, Ev, Io>>;
 
-// 这些 re-export 是 pipeline 的对外 API（供上层组装/扩展）。
-// 当前 crate 内部未必直接引用，避免触发 unused_imports 的噪声。
+// 这些 re-export 是 pipeline 的稳定扩展入口（供上层组装/扩展）。
+// 当前 crate 内部未必直接引用，避免触发 unused_imports 噪声。
 #[allow(unused_imports)]
 pub use builder::ChannelPipelineBuilder;
 #[allow(unused_imports)]

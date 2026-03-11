@@ -131,3 +131,11 @@ where
 - std server 与 transport server 都在请求进入/退出时维护 `active_requests`，在过载拒绝时更新 `overloaded`，并在 drain 后停止受理新请求。
 - `/readyz` 语义收敛为“可接流量”判定（draining/listener/dependency/accepting/overload）；`/healthz` 继续只表达存活（drain 中保持 200）。
 - in-flight 收敛边界明确：按 route/default request timeout deadline 收敛，不引入依赖探针框架。
+
+## 最新进展（T6 收尾：扩展面稳定化与最小示例）
+- pipeline 公开面收敛为最小稳定集合：`ChannelPipelineBuilder`、`ChannelHandler`、`AppServiceOptions`、`OverloadAction`、`FrameDecoderProfile`、`DelimiterSpec`；internal module 保持非承诺。
+- `spark-host` 明确宿主层稳定入口：`HostBuilder`、`ServerConfig`、`MgmtGroup`、`EndpointBuilder`。
+- 新增 `docs/EXTENSION_SURFACE.md`：统一说明连接生命周期 hook、请求生命周期 hook、metrics/tracing hook、codec/framing 扩展位置，以及 stable/internal 边界。
+- 新增 `spark-dist-mio` 最小可运行示例：
+  - `examples/mgmt_metrics_hook.rs`：展示 diagnostics/metrics 状态读取与管理路由扩展；
+  - `examples/mgmt_timeout_group.rs`：展示 `map_group(...).with_request_timeout(...)`。

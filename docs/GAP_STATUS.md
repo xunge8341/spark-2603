@@ -67,6 +67,9 @@ This document is the trunk baseline. It must match code and verification scripts
 ## Update T6（扩展点整理）
 - pipeline builder 暴露 `app_service_options(...)` 作为 per-handler/per-protocol 覆盖入口（不引入额外多层 trait）。
 - dataplane 配置新增并文档化 app-service 并发/队列/过载策略字段，并通过 `describe_effective()` 对外可审计。
+- pipeline 对外 re-export 收敛到最小稳定入口（builder/handler/options/profile），并明确 internal module 非稳定承诺。
+- 新增 `docs/EXTENSION_SURFACE.md`，固定连接/请求/metrics-tracing/codec-framing 的扩展边界与稳定承诺。
+- `spark-dist-mio` 新增最小示例：`mgmt_metrics_hook.rs` 与 `mgmt_timeout_group.rs`，分别覆盖 diagnostics hook 与 group timeout 用法。
 
 
 ## Update T7（drain/readiness 生命周期闭环）

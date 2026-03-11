@@ -672,3 +672,16 @@
 - 仅有 `draining` 布尔不足以表达生产就绪语义，至少需要 listener/dependency/accepting/overload 联动。
 - 本轮目标是生命周期闭环而非框架化探针：保持状态模型简单、可审计、低耦合。
 - 在途收敛采用既有 request timeout 作为上界，能在不扩散跨层生命周期复杂度的前提下提供可验证行为。
+## Iteration 31（T6 收尾）：扩展面稳定边界冻结（2026-03-11）
+
+### 决策
+- 冻结并文档化当前最小扩展面，不引入新 middleware/plugin 框架：
+  - `spark-transport::async_bridge::pipeline` 仅对外承诺 builder/handler/options/profile 的 re-export；
+  - `head`/`tail`/`context`/`event` 等模块路径归类为 internal 实现细节，不作稳定承诺；
+  - `spark-host` 公开宿主层稳定入口：`HostBuilder`、`ServerConfig`、`MgmtGroup`、`EndpointBuilder`。
+- 配套提供最小可运行示例（diagnostics hook 与 group timeout），作为扩展契约的可执行参考。
+
+### 依据
+- 当前 trunk 已具备 pipeline builder、group/route timeout、metrics/logging 风格示例，但缺少“稳定入口 vs internal”边界文本，导致外部调用方容易误依赖内部路径。
+- 通过“最小公开 + 文档契约 + 示例”可在不改变 dataplane 热路径语义/性能的前提下，降低扩展使用歧义。
+- 保持“只整理口子，不抢做生态”的范围控制：不新增抽象层，不扩散 trait 体系。
