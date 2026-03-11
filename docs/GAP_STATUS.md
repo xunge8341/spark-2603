@@ -43,3 +43,8 @@ This document is the trunk baseline. It must match code and verification scripts
 ## Known blocking risk
 - Windows mio `write_pressure_smoke` forward-progress stall remains open and is tracked in `docs/KNOWN_ISSUES.md`.
 - This issue is now surfaced as an explicit known-failing gate/report item (no silent ignore policy).
+
+## Update T3（超时/就绪/排水治理）
+- 已在 host/ember 管理面补齐连接级 timeout（idle/read/write/headers）与请求级 timeout（默认 + route/group 覆盖）。
+- `/healthz` 与 `/readyz` 语义分离：`/readyz` 现在同时检查 draining、listener readiness、dependency readiness。
+- 增加过载治理配置：并发上限、每连接 inflight、队列上限与 reject policy（503/429/直接关闭）。

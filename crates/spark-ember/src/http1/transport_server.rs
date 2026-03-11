@@ -8,11 +8,11 @@
 //! - Management QPS is low; correctness, observability, and clean layering matter more than micro-optimizations.
 //! - The transport framing profile emits **complete requests** (head + body bytes).
 
+use std::net::SocketAddr;
+use std::sync::atomic::AtomicBool;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::thread;
-use std::net::SocketAddr;
-use std::sync::atomic::AtomicBool;
 
 use spark_buffer::Bytes;
 use spark_codec::prelude::*;
@@ -63,7 +63,12 @@ impl TransportServer {
         state: Arc<EmberState>,
         metrics: Arc<DataPlaneMetrics>,
     ) -> Self {
-        Self { profile, routes, state, metrics }
+        Self {
+            profile,
+            routes,
+            state,
+            metrics,
+        }
     }
 
     #[inline]
@@ -77,8 +82,12 @@ impl TransportServer {
     /// for each distribution. Therefore `spark-ember` receives a backend-specific spawn closure.
     pub fn try_spawn_with<Spawn>(self, spawn: Spawn) -> std::io::Result<TransportServerHandle>
     where
-        Spawn: FnOnce(DataPlaneConfig, Arc<AtomicBool>, Arc<HttpMgmtService>, Arc<DataPlaneMetrics>)
-            -> std::io::Result<SpawnedTcpDataplane>,
+        Spawn: FnOnce(
+            DataPlaneConfig,
+            Arc<AtomicBool>,
+            Arc<HttpMgmtService>,
+            Arc<DataPlaneMetrics>,
+        ) -> std::io::Result<SpawnedTcpDataplane>,
     {
         let cfg = self.profile.transport_config();
         self.try_spawn_with_config(cfg, spawn)
@@ -87,8 +96,12 @@ impl TransportServer {
     /// Spawn the management server with the throughput-oriented transport profile.
     pub fn try_spawn_perf_with<Spawn>(self, spawn: Spawn) -> std::io::Result<TransportServerHandle>
     where
-        Spawn: FnOnce(DataPlaneConfig, Arc<AtomicBool>, Arc<HttpMgmtService>, Arc<DataPlaneMetrics>)
-            -> std::io::Result<SpawnedTcpDataplane>,
+        Spawn: FnOnce(
+            DataPlaneConfig,
+            Arc<AtomicBool>,
+            Arc<HttpMgmtService>,
+            Arc<DataPlaneMetrics>,
+        ) -> std::io::Result<SpawnedTcpDataplane>,
     {
         let cfg = self.profile.transport_perf_config();
         self.try_spawn_with_config(cfg, spawn)
@@ -100,8 +113,12 @@ impl TransportServer {
         spawn: Spawn,
     ) -> std::io::Result<TransportServerHandle>
     where
-        Spawn: FnOnce(DataPlaneConfig, Arc<AtomicBool>, Arc<HttpMgmtService>, Arc<DataPlaneMetrics>)
-            -> std::io::Result<SpawnedTcpDataplane>,
+        Spawn: FnOnce(
+            DataPlaneConfig,
+            Arc<AtomicBool>,
+            Arc<HttpMgmtService>,
+            Arc<DataPlaneMetrics>,
+        ) -> std::io::Result<SpawnedTcpDataplane>,
     {
         let service = Arc::new(HttpMgmtService {
             routes: Arc::clone(&self.routes),
@@ -110,7 +127,8 @@ impl TransportServer {
             max_head_bytes: self.profile.http.max_head_bytes,
             max_headers: self.profile.http.max_headers,
             max_body_bytes: self.profile.http.max_body_bytes,
-            max_inflight: self.profile.isolation.max_inflight,
+            max_inflight: self.profile.overload.max_concurrent_requests,
+            reject_policy: self.profile.overload.reject_policy,
             inflight: AtomicUsize::new(0),
         });
 
@@ -134,6 +152,7 @@ pub struct HttpMgmtService {
     max_headers: usize,
     max_body_bytes: usize,
     max_inflight: usize,
+    reject_policy: spark_host::mgmt_profile::MgmtRejectPolicy,
     inflight: AtomicUsize,
 }
 
@@ -148,6 +167,7 @@ impl std::fmt::Debug for HttpMgmtService {
             .field("max_headers", &self.max_headers)
             .field("max_body_bytes", &self.max_body_bytes)
             .field("max_inflight", &self.max_inflight)
+            .field("reject_policy", &self.reject_policy)
             .finish()
     }
 }
@@ -166,14 +186,29 @@ impl Service<Bytes> for HttpMgmtService {
     type Response = Option<Bytes>;
     type Error = KernelError;
 
-    async fn call(&self, mut context: Context, request: Bytes) -> Result<Self::Response, Self::Error> {
+    async fn call(
+        &self,
+        mut context: Context,
+        request: Bytes,
+    ) -> Result<Self::Response, Self::Error> {
         // Simple concurrency cap to keep mgmt isolated from pathological clients.
         let prev = self.inflight.fetch_add(1, Ordering::AcqRel);
         if prev >= self.max_inflight {
             self.inflight.fetch_sub(1, Ordering::Release);
-            return Ok(Some(encode_resp(503, "text/plain; charset=utf-8", b"Busy")));
+            let status = match self.reject_policy {
+                spark_host::mgmt_profile::MgmtRejectPolicy::ServiceUnavailable => 503,
+                spark_host::mgmt_profile::MgmtRejectPolicy::TooManyRequests => 429,
+                spark_host::mgmt_profile::MgmtRejectPolicy::CloseConnection => 503,
+            };
+            return Ok(Some(encode_resp(
+                status,
+                "text/plain; charset=utf-8",
+                b"Busy",
+            )));
         }
-        let _guard = InflightGuard { inflight: &self.inflight };
+        let _guard = InflightGuard {
+            inflight: &self.inflight,
+        };
 
         if request.len() > self.max_request_bytes {
             return Ok(Some(resp_413()));
@@ -218,7 +253,11 @@ impl Service<Bytes> for HttpMgmtService {
             MgmtResponse::status(404, "Not Found")
         };
 
-        Ok(Some(encode_resp(resp.status, resp.content_type, &resp.body)))
+        Ok(Some(encode_resp(
+            resp.status,
+            resp.content_type,
+            &resp.body,
+        )))
     }
 }
 

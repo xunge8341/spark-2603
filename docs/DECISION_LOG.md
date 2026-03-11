@@ -624,3 +624,15 @@
   - 多后端推进阶段最怕“名义支持”与“口径漂移”；先把状态诚实化，才能避免把兼容层误报为已完成原生后端。
   - `write_pressure_smoke` 已知问题若继续隐藏，会导致 CI 假绿和外部错误认知；显式 known-failing 报告是最低限度护栏。
   - Windows 专项测试集让“前进性”从口头承诺变成可执行证据，同时不破坏当前 phase-0 的主干推进节奏。
+
+## Iteration T3（2026-03-11）：管理面上线治理基线（timeout/readiness/drain）
+
+- 决策：
+  1) 管理面引入连接级 timeout（idle/read/write/headers）与请求级 timeout（默认 + route/group override），禁止单一 global hard timeout。
+  2) `/healthz` 定义为进程存活；`/readyz` 定义为综合就绪，至少包含 listener/draining/dependency 三类信号。
+  3) drain 进入后拒绝新请求；在途请求按 request deadline 收敛。
+  4) 过载治理采用显式参数化：max concurrent、per-connection inflight、queue limit、reject policy。
+
+- 依据：
+  - 对齐 ASP.NET Core/Kestrel 的治理能力等级（而非 API 同名）。
+  - 保持 host/runtime 分层不破坏既有 driver kernel 契约与 transport 语义。

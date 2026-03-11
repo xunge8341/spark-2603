@@ -10,6 +10,73 @@ use spark_transport::{Budget, DataPlaneConfig, DataPlaneLimits, DataPlaneOptions
 use std::net::SocketAddr;
 use std::time::Duration;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MgmtRejectPolicy {
+    ServiceUnavailable,
+    TooManyRequests,
+    CloseConnection,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct MgmtConnectionTimeouts {
+    pub idle_timeout: Duration,
+    pub read_timeout: Duration,
+    pub write_timeout: Duration,
+    pub request_headers_timeout: Duration,
+}
+
+impl Default for MgmtConnectionTimeouts {
+    fn default() -> Self {
+        Self {
+            idle_timeout: Duration::from_secs(30),
+            read_timeout: Duration::from_secs(15),
+            write_timeout: Duration::from_secs(15),
+            request_headers_timeout: Duration::from_secs(5),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct MgmtRequestTimeouts {
+    pub default_timeout: Duration,
+}
+
+impl Default for MgmtRequestTimeouts {
+    fn default() -> Self {
+        Self {
+            default_timeout: Duration::from_secs(10),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct MgmtOverloadOptions {
+    pub max_concurrent_requests: usize,
+    pub max_inflight_per_connection: usize,
+    pub queue_limit: usize,
+    pub reject_policy: MgmtRejectPolicy,
+}
+
+impl Default for MgmtOverloadOptions {
+    fn default() -> Self {
+        Self {
+            max_concurrent_requests: 128,
+            max_inflight_per_connection: 1,
+            queue_limit: 32,
+            reject_policy: MgmtRejectPolicy::ServiceUnavailable,
+        }
+    }
+}
+
+impl MgmtOverloadOptions {
+    #[inline]
+    pub fn normalized(mut self) -> Self {
+        self.max_concurrent_requests = self.max_concurrent_requests.max(1);
+        self.max_inflight_per_connection = self.max_inflight_per_connection.max(1);
+        self
+    }
+}
+
 /// HTTP request limits for the management plane.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct MgmtHttpLimits {
@@ -106,6 +173,9 @@ pub struct MgmtTransportProfileV1 {
     pub shutdown_timeout: Duration,
     pub http: MgmtHttpLimits,
     pub isolation: MgmtIsolationOptions,
+    pub connection_timeouts: MgmtConnectionTimeouts,
+    pub request_timeouts: MgmtRequestTimeouts,
+    pub overload: MgmtOverloadOptions,
     /// Whether the mgmt transport emits best-effort evidence logs.
     pub emit_evidence_log: bool,
 }
@@ -118,6 +188,9 @@ pub struct MgmtProfileEffectiveConfig {
     pub http: MgmtHttpLimits,
     pub effective_max_request_bytes: usize,
     pub isolation: MgmtIsolationOptions,
+    pub connection_timeouts: MgmtConnectionTimeouts,
+    pub request_timeouts: MgmtRequestTimeouts,
+    pub overload: MgmtOverloadOptions,
     pub emit_evidence_log: bool,
 }
 
@@ -127,6 +200,7 @@ impl MgmtTransportProfileV1 {
         self.shutdown_timeout = self.shutdown_timeout.max(Duration::from_millis(1));
         self.http = self.http.normalized();
         self.isolation = self.isolation.normalized();
+        self.overload = self.overload.normalized();
         self
     }
 
@@ -165,6 +239,9 @@ impl MgmtTransportProfileV1 {
             http: normalized.http,
             effective_max_request_bytes: normalized.http.effective_max_request_bytes(),
             isolation: normalized.isolation,
+            connection_timeouts: normalized.connection_timeouts,
+            request_timeouts: normalized.request_timeouts,
+            overload: normalized.overload,
             emit_evidence_log: normalized.emit_evidence_log,
         }
     }
@@ -185,6 +262,9 @@ impl Default for MgmtTransportProfileV1 {
             shutdown_timeout: Duration::from_secs(10),
             http: MgmtHttpLimits::default(),
             isolation: MgmtIsolationOptions::default(),
+            connection_timeouts: MgmtConnectionTimeouts::default(),
+            request_timeouts: MgmtRequestTimeouts::default(),
+            overload: MgmtOverloadOptions::default(),
             emit_evidence_log: false,
         }
     }
@@ -192,7 +272,10 @@ impl Default for MgmtTransportProfileV1 {
 
 #[cfg(test)]
 mod tests {
-    use super::{MgmtHttpLimits, MgmtIsolationOptions, MgmtTransportProfileV1};
+    use super::{
+        MgmtConnectionTimeouts, MgmtHttpLimits, MgmtIsolationOptions, MgmtOverloadOptions,
+        MgmtRequestTimeouts, MgmtTransportProfileV1,
+    };
     use spark_transport::async_bridge::FrameDecoderProfile;
     use spark_transport::{Budget, DataPlaneLimits};
     use std::time::Duration;
@@ -230,6 +313,9 @@ mod tests {
                     max_nanos: 500_000,
                 },
             },
+            connection_timeouts: MgmtConnectionTimeouts::default(),
+            request_timeouts: MgmtRequestTimeouts::default(),
+            overload: MgmtOverloadOptions::default(),
             emit_evidence_log: false,
         };
 
@@ -281,6 +367,9 @@ mod tests {
                     max_nanos: 6,
                 },
             },
+            connection_timeouts: MgmtConnectionTimeouts::default(),
+            request_timeouts: MgmtRequestTimeouts::default(),
+            overload: MgmtOverloadOptions::default(),
             emit_evidence_log: true,
         };
 

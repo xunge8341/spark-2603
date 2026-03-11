@@ -18,7 +18,9 @@ pub struct MgmtApp {
 
 impl MgmtApp {
     pub fn new() -> Self {
-        Self { routes: HashMap::new() }
+        Self {
+            routes: HashMap::new(),
+        }
     }
 
     pub fn routes(&self) -> &RouteSet {
@@ -30,10 +32,18 @@ impl MgmtApp {
     }
 
     pub fn map_group<'a>(&'a mut self, prefix: impl Into<Box<str>>) -> MgmtGroup<'a> {
-        MgmtGroup { app: self, prefix: prefix.into() }
+        MgmtGroup {
+            app: self,
+            prefix: prefix.into(),
+            default_request_timeout: None,
+        }
     }
 
-    pub fn map_get<'a, F, Fut>(&'a mut self, path: impl Into<Box<str>>, handler: F) -> EndpointBuilder<'a>
+    pub fn map_get<'a, F, Fut>(
+        &'a mut self,
+        path: impl Into<Box<str>>,
+        handler: F,
+    ) -> EndpointBuilder<'a>
     where
         F: Fn(MgmtRequest) -> Fut + Send + Sync + 'static,
         Fut: Future<Output = MgmtResponse> + Send + 'static,
@@ -41,7 +51,11 @@ impl MgmtApp {
         self.map(kinds::GET, path, handler)
     }
 
-    pub fn map_post<'a, F, Fut>(&'a mut self, path: impl Into<Box<str>>, handler: F) -> EndpointBuilder<'a>
+    pub fn map_post<'a, F, Fut>(
+        &'a mut self,
+        path: impl Into<Box<str>>,
+        handler: F,
+    ) -> EndpointBuilder<'a>
     where
         F: Fn(MgmtRequest) -> Fut + Send + Sync + 'static,
         Fut: Future<Output = MgmtResponse> + Send + 'static,
@@ -49,7 +63,12 @@ impl MgmtApp {
         self.map(kinds::POST, path, handler)
     }
 
-    pub fn map<'a, K, F, Fut>(&'a mut self, kind: K, path: impl Into<Box<str>>, handler: F) -> EndpointBuilder<'a>
+    pub fn map<'a, K, F, Fut>(
+        &'a mut self,
+        kind: K,
+        path: impl Into<Box<str>>,
+        handler: F,
+    ) -> EndpointBuilder<'a>
     where
         K: Into<RouteKind>,
         F: Fn(MgmtRequest) -> Fut + Send + Sync + 'static,
@@ -59,11 +78,17 @@ impl MgmtApp {
         let path: Box<str> = path.into();
         let default_id: Box<str> = path.clone();
 
-        let h = Arc::new(move |req| -> Pin<Box<dyn Future<Output = MgmtResponse> + Send + 'static>> {
-            Box::pin(handler(req))
-        }) as Arc<MgmtHandlerFn>;
+        let h = Arc::new(
+            move |req| -> Pin<Box<dyn Future<Output = MgmtResponse> + Send + 'static>> {
+                Box::pin(handler(req))
+            },
+        ) as Arc<MgmtHandlerFn>;
 
-        let entry = RouteEntry { route_id: default_id, handler: h };
+        let entry = RouteEntry {
+            route_id: default_id,
+            handler: h,
+            request_timeout: None,
+        };
 
         let entry_mut = self
             .routes

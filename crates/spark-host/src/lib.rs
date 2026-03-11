@@ -8,12 +8,14 @@
 pub mod builder;
 pub mod config;
 pub mod mgmt_profile;
-pub mod router;
 pub mod route_metrics;
+pub mod router;
 
 pub use builder::{HostBuilder, HostSpec, NoPipeline};
 pub use config::ServerConfig;
-pub use mgmt_profile::{MgmtHttpLimits, MgmtIsolationOptions, MgmtTransportProfileV1};
+pub use mgmt_profile::{
+    MgmtConnectionTimeouts, MgmtHttpLimits, MgmtIsolationOptions, MgmtOverloadOptions,
+    MgmtRejectPolicy, MgmtRequestTimeouts, MgmtTransportProfileV1,
+};
 
 pub use route_metrics::RouteMetrics;
-

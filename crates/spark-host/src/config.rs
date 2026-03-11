@@ -96,6 +96,61 @@ impl ServerConfig {
         self
     }
 
+    #[inline]
+    pub fn with_connection_idle_timeout(mut self, timeout: Duration) -> Self {
+        self.mgmt.connection_timeouts.idle_timeout = timeout.max(Duration::from_millis(1));
+        self
+    }
+
+    #[inline]
+    pub fn with_connection_read_timeout(mut self, timeout: Duration) -> Self {
+        self.mgmt.connection_timeouts.read_timeout = timeout.max(Duration::from_millis(1));
+        self
+    }
+
+    #[inline]
+    pub fn with_connection_write_timeout(mut self, timeout: Duration) -> Self {
+        self.mgmt.connection_timeouts.write_timeout = timeout.max(Duration::from_millis(1));
+        self
+    }
+
+    #[inline]
+    pub fn with_request_headers_timeout(mut self, timeout: Duration) -> Self {
+        self.mgmt.connection_timeouts.request_headers_timeout =
+            timeout.max(Duration::from_millis(1));
+        self
+    }
+
+    #[inline]
+    pub fn with_request_timeout(mut self, timeout: Duration) -> Self {
+        self.mgmt.request_timeouts.default_timeout = timeout.max(Duration::from_millis(1));
+        self
+    }
+
+    #[inline]
+    pub fn with_max_concurrent_requests(mut self, limit: usize) -> Self {
+        self.mgmt.overload.max_concurrent_requests = limit.max(1);
+        self
+    }
+
+    #[inline]
+    pub fn with_max_inflight_per_connection(mut self, limit: usize) -> Self {
+        self.mgmt.overload.max_inflight_per_connection = limit.max(1);
+        self
+    }
+
+    #[inline]
+    pub fn with_request_queue_limit(mut self, limit: usize) -> Self {
+        self.mgmt.overload.queue_limit = limit;
+        self
+    }
+
+    #[inline]
+    pub fn with_reject_policy(mut self, policy: crate::mgmt_profile::MgmtRejectPolicy) -> Self {
+        self.mgmt.overload.reject_policy = policy;
+        self
+    }
+
     /// Effective max request bytes used by transport framing.
     ///
     /// This ensures framing bounds cover the configured head/body limits.
