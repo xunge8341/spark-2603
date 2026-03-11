@@ -82,3 +82,10 @@ This document is the trunk baseline. It must match code and verification scripts
 - transport-backed 管理面在 `try_spawn_with(_perf)` 成功后，保持与 std server 一致的启动状态：`listener_ready=true`、`accepting_new_requests=true`、`overloaded=false`。
 - 新增 transport handle join wrapper：当 transport dataplane 线程退出（正常/panic）时，统一回落 `listener_ready=false`、`accepting_new_requests=false`、`overloaded=false`，避免“只在启动置 true，无退出回落”的状态漂移。
 - `active_requests` 继续由请求级 guard 维护；单测补齐“请求结束回到 0、重复 decrement 不下溢”约束，确保 drain/退出期间不出现负数语义或泄漏。
+
+## Update T7.2（transport-backed dataplane 端到端烟测补齐）
+- 在 `crates/spark-dist-mio/tests/mgmt_dogfooding_smoke.rs` 新增 transport-backed E2E 覆盖，补齐此前仅 service-level 单测的缺口。
+- 新增 route-level timeout 与 group-level default timeout 的真实 socket 验证，确保请求经 dataplane 后仍返回 504。
+- 新增 overload 压力路径验证（受限并发/队列 + reject policy），在真实 transport 路径断言 429/503 语义。
+- 新增 drain + inflight 收敛验证：先进入在途，再触发 `/drain`，新请求被拒绝且在途请求按 timeout deadline 收敛。
+- 文档上明确“service-level 覆盖用于逻辑快速回归；E2E 覆盖用于 transport/dataplane 集成语义验收”。

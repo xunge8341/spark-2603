@@ -139,3 +139,14 @@ where
 - 新增 `spark-dist-mio` 最小可运行示例：
   - `examples/mgmt_metrics_hook.rs`：展示 diagnostics/metrics 状态读取与管理路由扩展；
   - `examples/mgmt_timeout_group.rs`：展示 `map_group(...).with_request_timeout(...)`。
+
+## 最新进展（T7.2：service-level vs E2E 覆盖分层）
+- 覆盖分层说明：
+  - service-level：保留在 `crates/spark-ember/src/http1/transport_server.rs`，用于直接验证 handler/service 逻辑（快速、定位清晰）。
+  - transport-backed E2E：新增于 `crates/spark-dist-mio/tests/mgmt_dogfooding_smoke.rs`，通过真实 socket + dataplane 验证 timeout/overload/drain 的集成语义。
+- 新增 E2E smoke 项：
+  - route-level timeout -> 504；
+  - group-level default timeout -> 504；
+  - overload reject（按 policy）-> 429/503；
+  - drain with inflight：drain 后拒绝新请求，在途请求按 deadline 收敛。
+- 目标不是替代 service-level，而是形成“逻辑回归 + 数据面集成”双保险。
