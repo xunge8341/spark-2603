@@ -20,6 +20,33 @@ run_bench_gate="${run_bench_gate,,}"
 run_completion_gate="${SPARK_VERIFY_COMPLETION_GATE:-}"
 run_completion_gate="${run_completion_gate,,}"
 
+is_windows=0
+case "${OSTYPE:-}" in
+  msys*|cygwin*|win32*) is_windows=1 ;;
+esac
+
+print_backend_status(){
+  echo "[status] Linux dataplane: production baseline (spark-transport-mio)"
+  echo "[status] Windows IOCP backend: phase-0 compatibility layer (NOT native production dataplane)"
+  echo "[status] Known gap: KI-001 Windows write_pressure_smoke forward-progress stall (known-failing)"
+}
+
+run_windows_known_failing_gate(){
+  if [[ "$is_windows" -ne 1 ]]; then
+    echo "[known-gap] windows_write_pressure_smoke: skipped (non-Windows environment)"
+    return 0
+  fi
+
+  echo "[known-gap] windows_write_pressure_smoke: running ignored test as known-failing evidence"
+  if cargo test -p spark-transport-mio --test write_pressure_smoke -- --ignored --nocapture; then
+    die "windows_write_pressure_smoke unexpectedly passed; update KI-001 status and remove ignore marker"
+  fi
+  echo "[known-gap] windows_write_pressure_smoke: still failing (expected in current phase)."
+}
+
+
+print_backend_status
+
 echo "[1/7] cargo fmt"
 bash ./scripts/fmt.sh
 
@@ -62,5 +89,8 @@ if [[ "$run_bench_gate" == "1" || "$run_bench_gate" == "true" || "$run_bench_gat
   echo "[optional] bench gate (SPARK_VERIFY_BENCH_GATE)"
   bash ./scripts/bench_gate.sh
 fi
+
+
+run_windows_known_failing_gate
 
 echo "OK: verify passed."

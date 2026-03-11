@@ -17,7 +17,7 @@ This file is the source of truth for backend correctness scope and current statu
 | Backend crate | Current role | Contract status | Default gate status |
 |---|---|---|---|
 | `spark-transport-mio` | Primary dataplane backend | Primary path for contract execution | Blocking via `verify.sh` workspace + contract suite |
-| `spark-transport-iocp` | Windows leaf boundary (phase-0 wrapper by default) | Runnable completion prototype exists behind feature flag; native socket overlapped path pending | Non-blocking unless `SPARK_VERIFY_COMPLETION_GATE=1` |
+| `spark-transport-iocp` | Windows compatibility layer (phase-0 wrapper by default) | Runnable completion prototype exists behind feature flag; native socket overlapped path pending | Non-blocking unless `SPARK_VERIFY_COMPLETION_GATE=1` |
 | `spark-engine-uring` | Local engine / bring-up scaffold | Not a parity backend yet | Not a dedicated blocking gate |
 
 ## Non-negotiable invariants
