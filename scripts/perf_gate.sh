@@ -1,87 +1,79 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Run the local dataplane perf smoke and fail if coarse baseline thresholds regress.
-# Threshold resolution order:
-# 1) Baseline file (SPARK_PERF_BASELINE, else platform default under perf/baselines/)
-# 2) Explicit env var overrides:
-#    - SPARK_MAX_SYSCALLS_PER_KIB
-#    - SPARK_MIN_WRITEV_SHARE
-
 resolve_baseline_path() {
   if [[ -n "${SPARK_PERF_BASELINE:-}" ]]; then
     printf '%s\n' "$SPARK_PERF_BASELINE"
     return
   fi
 
-  if [[ -f "perf/baselines/unix.toml" ]]; then
-    printf '%s\n' "perf/baselines/unix.toml"
+  local platform_file="perf_gate_unix.json"
+  if [[ "$(uname -s)" == *"NT"* ]] || [[ "$(uname -s)" == *"MINGW"* ]] || [[ "$(uname -s)" == *"MSYS"* ]]; then
+    platform_file="perf_gate_windows.json"
+  fi
+
+  if [[ -f "perf/baselines/${platform_file}" ]]; then
+    printf '%s\n' "perf/baselines/${platform_file}"
     return
   fi
 
-  printf '%s\n' "perf/baselines/default.toml"
-}
-
-get_baseline_value() {
-  local path="$1"
-  local key="$2"
-  local default_value="$3"
-
-  if [[ ! -f "$path" ]]; then
-    printf '%s\n' "$default_value"
-    return
-  fi
-
-  local raw
-  raw="$(sed -n "s/^[[:space:]]*${key}[[:space:]]*=[[:space:]]*//p" "$path" | head -n 1 || true)"
-  if [[ -z "$raw" ]]; then
-    printf '%s\n' "$default_value"
-    return
-  fi
-
-  raw="${raw%\"}"
-  raw="${raw#\"}"
-  printf '%s\n' "$raw"
+  printf '%s\n' "perf/baselines/perf_gate_default.json"
 }
 
 BASELINE_PATH="$(resolve_baseline_path)"
-BASELINE_MAX_SYSCALLS_PER_KIB="$(get_baseline_value "$BASELINE_PATH" "max_syscalls_per_kib" "1.0")"
-BASELINE_MIN_WRITEV_SHARE="$(get_baseline_value "$BASELINE_PATH" "min_writev_share" "0.5")"
-BASELINE_PROFILE="$(get_baseline_value "$BASELINE_PATH" "profile" "default")"
+REPORT_DIR="${SPARK_BENCH_REPORT_DIR:-benchmark/reports}"
+REPORT_JSON="${SPARK_BENCH_REPORT_JSON:-$REPORT_DIR/perf_report.json}"
+REPORT_CSV="${SPARK_BENCH_REPORT_CSV:-$REPORT_DIR/perf_report.csv}"
 
-MAX_SYSCALLS_PER_KIB="${SPARK_MAX_SYSCALLS_PER_KIB:-$BASELINE_MAX_SYSCALLS_PER_KIB}"
-MIN_WRITEV_SHARE="${SPARK_MIN_WRITEV_SHARE:-$BASELINE_MIN_WRITEV_SHARE}"
+echo "Using perf baseline: $BASELINE_PATH"
+echo "[1/2] generate benchmark report"
+SPARK_BENCH_REPORT_DIR="$REPORT_DIR" SPARK_BENCH_REPORT_JSON="$REPORT_JSON" SPARK_BENCH_REPORT_CSV="$REPORT_CSV" \
+  scripts/perf_report.sh
 
-echo "Using perf baseline: $BASELINE_PATH (profile=$BASELINE_PROFILE, max_syscalls_per_kib=$MAX_SYSCALLS_PER_KIB, min_writev_share=$MIN_WRITEV_SHARE)"
+echo "[2/2] compare report with baseline"
+python3 - "$BASELINE_PATH" "$REPORT_JSON" <<'PY'
+import json
+import sys
 
-echo "[1/2] cargo test -p spark-transport-contract --test perf_baseline --no-run --locked"
-cargo test -p spark-transport-contract --test perf_baseline --no-run --locked
+baseline_path, report_path = sys.argv[1], sys.argv[2]
+with open(baseline_path, 'r', encoding='utf-8') as f:
+    baseline = json.load(f)
+with open(report_path, 'r', encoding='utf-8') as f:
+    report = json.load(f)
 
-echo "[2/2] cargo test -p spark-transport-contract --test perf_baseline -- --ignored --nocapture"
-OUTPUT="$(cargo test -p spark-transport-contract --locked --test perf_baseline -- --ignored --nocapture 2>&1)"
-printf '%s\n' "$OUTPUT"
+scenarios = {s['scenario']: s for s in report.get('scenarios', [])}
+errors = []
 
-PERF_LINE="$(printf '%s\n' "$OUTPUT" | grep '^[[:space:]]*SPARK_PERF ' | tail -n 1 || true)"
-if [[ -z "$PERF_LINE" ]]; then
-  echo "Failed to find SPARK_PERF output line." >&2
-  exit 1
-fi
+def check(name, field, actual, expected, mode):
+    if mode == 'min' and actual < expected:
+        errors.append(f"{name}: {field}={actual} < min {expected}")
+    if mode == 'max' and actual > expected:
+        errors.append(f"{name}: {field}={actual} > max {expected}")
 
-SYSCALLS_PER_KIB="$(printf '%s\n' "$PERF_LINE" | sed -n 's/.*syscalls_per_kib=\([0-9.][0-9.]*\).*/\1/p')"
-WRITEV_SHARE="$(printf '%s\n' "$PERF_LINE" | sed -n 's/.*writev_share=\([0-9.][0-9.]*\).*/\1/p')"
-if [[ -z "$SYSCALLS_PER_KIB" || -z "$WRITEV_SHARE" ]]; then
-  echo "Failed to parse perf metrics from: $PERF_LINE" >&2
-  exit 1
-fi
+for rule in baseline.get('scenarios', []):
+    name = rule['scenario']
+    actual = scenarios.get(name)
+    if actual is None:
+        errors.append(f"missing scenario in report: {name}")
+        continue
+    for field, threshold in rule.get('min', {}).items():
+        check(name, field, actual.get(field, 0), threshold, 'min')
+    for field, threshold in rule.get('max', {}).items():
+        check(name, field, actual.get(field, 0), threshold, 'max')
 
-awk -v actual="$SYSCALLS_PER_KIB" -v max="$MAX_SYSCALLS_PER_KIB" 'BEGIN { if (actual > max) exit 1 }' || {
-  echo "Perf gate failed: syscalls_per_kib=$SYSCALLS_PER_KIB exceeds $MAX_SYSCALLS_PER_KIB" >&2
-  exit 1
-}
+global_rule = baseline.get('global', {})
+global_actual = report.get('global', {})
+for field, threshold in global_rule.get('max', {}).items():
+    value = global_actual.get(field)
+    if value is None:
+        continue
+    check('global', field, value, threshold, 'max')
 
-awk -v actual="$WRITEV_SHARE" -v min="$MIN_WRITEV_SHARE" 'BEGIN { if (actual < min) exit 1 }' || {
-  echo "Perf gate failed: writev_share=$WRITEV_SHARE is below $MIN_WRITEV_SHARE" >&2
-  exit 1
-}
+if errors:
+    print('Perf gate failed:')
+    for err in errors:
+        print(f' - {err}')
+    sys.exit(1)
 
-echo "OK: perf gate passed (profile=$BASELINE_PROFILE, syscalls_per_kib=$SYSCALLS_PER_KIB, writev_share=$WRITEV_SHARE)."
+print('OK: perf gate passed for all scenarios.')
+PY

@@ -1,43 +1,55 @@
 # Performance baselines
 
-This directory stores coarse, versioned perf gate thresholds used by local scripts and CI.
+This directory stores versioned perf-gate thresholds used by local scripts and CI.
 
-The `scripts/perf_gate.*` helpers resolve a baseline file in this order:
+## Production-style perf gate
 
-1. `SPARK_PERF_BASELINE` explicit path
-2. Platform default (`perf/baselines/windows.toml` on Windows, `perf/baselines/unix.toml` on Unix)
-3. `perf/baselines/default.toml` fallback
+Use `scripts/perf_gate.sh`.
 
-Environment variables still win over file values:
+It now runs a scenario matrix and validates report-vs-baseline instead of parsing a single line:
 
-- `SPARK_MAX_SYSCALLS_PER_KIB`
-- `SPARK_MIN_WRITEV_SHARE`
+1. Generates a machine-readable report via `scripts/perf_report.sh`:
+   - JSON: `benchmark/reports/perf_report.json`
+   - CSV: `benchmark/reports/perf_report.csv`
+2. Compares the report against per-platform baselines:
+   - `perf/baselines/perf_gate_unix.json`
+   - `perf/baselines/perf_gate_windows.json`
+   - `perf/baselines/perf_gate_default.json`
 
-This keeps the gate reproducible while still allowing emergency local overrides.
+Baseline resolution order:
 
-## Mio cross-platform micro-bench
+1. `SPARK_PERF_BASELINE`
+2. Platform default (`perf_gate_windows.json` on Windows, `perf_gate_unix.json` on Unix)
+3. `perf_gate_default.json`
 
-The mio backend is used as the *cross-platform gate* (Windows/Linux/macOS) in M4.
+## Scenario matrix (minimum)
 
-For a coarse latency/throughput sanity check, run the TCP echo micro-bench:
+The report includes at least these trunk scenarios:
 
-- PowerShell: `scripts/bench_tcp_echo.ps1`
-- Bash: `scripts/bench_tcp_echo.sh`
+- `small_packet_high_freq`
+- `large_packet_streaming`
+- `slow_consumer`
+- `high_concurrency_short_conn`
 
-The bench gate (`scripts/bench_gate.*`) resolves its baseline in this order:
+Each scenario tracks:
 
-1. `SPARK_BENCH_BASELINE` explicit path
-2. Platform default (`perf/baselines/bench_tcp_echo_windows.toml` on Windows, `perf/baselines/bench_tcp_echo_unix.toml` on Unix)
-3. `perf/baselines/bench_tcp_echo_default.toml` fallback
+- latency (`p50_us`, `p95_us`, `p99_us`)
+- throughput (`throughput_rps`)
+- syscall & batching efficiency (`syscalls_per_kib`, `writev_share`)
+- copy pressure (`copy_per_byte`)
+- backpressure trigger count (`backpressure_events`)
+- peak RSS (best-effort `peak_rss_kib`; `-1` if unsupported by host toolchain)
 
-Environment overrides:
+Global report fields:
 
-- `SPARK_BENCH_MIN_RPS`
-- `SPARK_BENCH_MAX_P99_US`
+- `peak_inflight_buffer_bytes`
+- `alloc_count`
+- `alloc_bytes` (`null` for now; optional allocator instrumentation)
 
-The bench itself prints a single `SPARK_BENCH ...` line, which both scripts parse.
+## Platform honesty
 
+Baselines are split by platform on purpose.
 
-`tests/perf_baseline.rs` also prints alloc-control evidence in the `SPARK_PERF` line:
-- `ob_q_growth`, `ob_peak_queue_len`, `ob_peak_pending_bytes`
-- `cum_tail_growth`, `cum_tail_peak_capacity`
+- Unix and Windows thresholds are both first-class.
+- We do **not** reuse Linux-only “best looking” numbers as universal defaults.
+- `platform_note` in each baseline must explain the expectation level.

@@ -69,3 +69,11 @@
   - 默认值为 `usize::MAX`，保持现有行为兼容。
   - 超限返回稳定错误（当前映射为 `KernelError::NoMem`）。
 - perf baseline 输出追加 alloc evidence 摘要字段，便于回归比对。
+
+## T4：Perf gate 与 alloc 证据接线
+
+- `perf_report.json` 的 global 段接入 alloc 相关证据：
+  - `alloc_count`（当前映射 `ob_q_growth`）
+  - `alloc_bytes`（预留；后续可接 feature-gated allocator 统计）
+- gate 对 `peak_inflight_buffer_bytes` 建立阈值，确保 batching/flush 策略演进不会放大驻留内存上界。
+- 该接线保持“证据先行”：在未启用统一 allocator 统计前，不伪造 alloc bytes 数字。

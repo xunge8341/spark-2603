@@ -48,3 +48,8 @@ This document is the trunk baseline. It must match code and verification scripts
 - 已在 host/ember 管理面补齐连接级 timeout（idle/read/write/headers）与请求级 timeout（默认 + route/group 覆盖）。
 - `/healthz` 与 `/readyz` 语义分离：`/readyz` 现在同时检查 draining、listener readiness、dependency readiness。
 - 增加过载治理配置：并发上限、每连接 inflight、队列上限与 reject policy（503/429/直接关闭）。
+
+## Update T4（性能证据与 gate 补齐）
+- perf gate 从单点 `SPARK_PERF` 解析升级为“场景矩阵 + 基线对比”：`scripts/perf_gate.sh` 调用 `scripts/perf_report.sh` 生成 JSON/CSV，再按 `perf/baselines/perf_gate_*.json` 对比。
+- 指标口径覆盖吞吐 + 尾延迟 + syscall/batching + copy + backpressure，并补充 `peak_rss_kib` 与 `peak_inflight_buffer_bytes`。
+- 基线按 Unix/Windows 分离，显式避免“Linux 最优数字外推所有平台”。
