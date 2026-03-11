@@ -72,6 +72,7 @@
 - `ServerConfig` 新增管理面 timeout/overload 配置入口，保持 profile 作为单一事实来源。
 - `HostBuilder` 默认诊断路由中，`/readyz` 不再只看 draining，而是组合 listener 与依赖健康。
 - 路由层新增 request timeout 元数据，可在 route 与 group 维度覆盖。
+- transport-backed 管理面服务已将 request timeout / overload / draining 真正接入执行路径，并对 route/group/default timeout 进行 504 语义闭环验证。
 
 ## T5/T6 增量（并发治理与扩展口子）
 - 新增 app-service 级 Options：`max_inflight_per_connection`、`max_queue_per_connection`、`overload_action`，通过 `ChannelPipelineBuilder::app_service_options(...)` 接入；默认 profile 不变。

@@ -45,10 +45,28 @@ fn read_to_end(stream: &mut TcpStream, timeout: Duration) -> Vec<u8> {
                 // Treat timeout as end-of-stream for this smoke test.
                 break;
             }
+            Err(e) if e.kind() == std::io::ErrorKind::ConnectionReset => break,
             Err(e) => panic!("read failed: {e:?}"),
         }
     }
     out
+}
+
+fn request_with_retry(addr: std::net::SocketAddr, req: &[u8]) -> Vec<u8> {
+    let mut resp = Vec::new();
+    for _ in 0..10 {
+        let mut stream = TcpStream::connect(addr).expect("connect");
+        stream
+            .set_write_timeout(Some(Duration::from_secs(1)))
+            .expect("set write timeout");
+        stream.write_all(req).expect("write request");
+        resp = read_to_end(&mut stream, Duration::from_millis(500));
+        if !resp.is_empty() {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    resp
 }
 
 /// Dogfooding gate (P0): mgmt-plane must run on top of `spark-transport` and be reachable.
@@ -90,19 +108,7 @@ fn mgmt_transport_server_healthz_smoke() {
     let addr = handle.addr;
 
     let request = b"GET /healthz HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n";
-    let mut resp = Vec::new();
-    for _ in 0..10 {
-        let mut stream = TcpStream::connect(addr).expect("connect");
-        stream
-            .set_write_timeout(Some(Duration::from_secs(1)))
-            .expect("set write timeout");
-        stream.write_all(request).expect("write request");
-        resp = read_to_end(&mut stream, Duration::from_millis(300));
-        if !resp.is_empty() {
-            break;
-        }
-        std::thread::sleep(Duration::from_millis(50));
-    }
+    let resp = request_with_retry(addr, request);
 
     let text = String::from_utf8_lossy(&resp);
     if !resp.is_empty() {

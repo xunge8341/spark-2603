@@ -202,6 +202,41 @@ impl<S> HostBuilder<S> {
                 .with_request_timeout(timeout);
         })
     }
+
+    pub fn map_post_with_timeout<F, Fut>(
+        self,
+        path: impl Into<Box<str>>,
+        route_id: impl Into<Box<str>>,
+        timeout: std::time::Duration,
+        handler: F,
+    ) -> Self
+    where
+        F: Fn(MgmtRequest) -> Fut + Send + Sync + 'static,
+        Fut: Future<Output = MgmtResponse> + Send + 'static,
+    {
+        let path = path.into();
+        let route_id: Box<str> = route_id.into();
+        let counter = self.route_metrics.register(route_id.clone());
+        let h = Arc::new(handler);
+
+        self.mgmt(|app| {
+            let counter = Arc::clone(&counter);
+            let h = Arc::clone(&h);
+            let wrapped = move |req: MgmtRequest| {
+                let g = counter.begin();
+                let start = Instant::now();
+                let h = Arc::clone(&h);
+                async move {
+                    let resp = (h)(req).await;
+                    g.finish(resp.status, start.elapsed());
+                    resp
+                }
+            };
+            app.map_post(path, wrapped)
+                .named(route_id)
+                .with_request_timeout(timeout);
+        })
+    }
     pub fn map_post<F, Fut>(
         self,
         path: impl Into<Box<str>>,
@@ -275,6 +310,7 @@ impl<S> HostBuilder<S> {
         })
     }
 
+    /// Register the default diagnostics endpoints (`/healthz`, `/readyz`, `/metrics`, `/drain`).
     pub fn use_default_diagnostics(mut self) -> Self {
         // /healthz
         self = self.map_get("/healthz", "healthz", |_| async { MgmtResponse::ok("OK") });
@@ -447,5 +483,22 @@ mod tests {
         );
         assert_eq!(builder.dataplane.flush_policy.max_syscalls, 64);
         assert!(builder.dataplane.validate().is_ok());
+    }
+
+    #[test]
+    fn map_post_with_timeout_sets_route_timeout_metadata() {
+        let timeout = std::time::Duration::from_millis(30);
+        let app = HostBuilder::<NoPipeline>::new()
+            .map_post_with_timeout("/timeout", "timeout-route", timeout, |_req| async {
+                crate::router::MgmtResponse::ok("OK")
+            })
+            .mgmt;
+
+        let timeout_meta = app
+            .routes()
+            .get("POST")
+            .and_then(|m| m.get("/timeout"))
+            .and_then(|entry| entry.request_timeout);
+        assert_eq!(timeout_meta, Some(timeout));
     }
 }

@@ -53,10 +53,13 @@ fn status_line(status: u16) -> &'static str {
     match status {
         200 => "HTTP/1.1 200 OK",
         400 => "HTTP/1.1 400 Bad Request",
+        408 => "HTTP/1.1 408 Request Timeout",
+        429 => "HTTP/1.1 429 Too Many Requests",
         404 => "HTTP/1.1 404 Not Found",
         413 => "HTTP/1.1 413 Payload Too Large",
         500 => "HTTP/1.1 500 Internal Server Error",
         503 => "HTTP/1.1 503 Service Unavailable",
+        504 => "HTTP/1.1 504 Gateway Timeout",
         _ => "HTTP/1.1 500 Internal Server Error",
     }
 }
