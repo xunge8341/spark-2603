@@ -12,11 +12,12 @@ This document is the trunk baseline. It must match code and verification scripts
 - `install_channel() -> sync_interest(chan_id)` contract baseline is frozen.
 
 ### Safety/quality gates are executable
-- `scripts/verify.sh` blocks on: fmt, clippy, deps invariants, panic scan, unsafe audit, workspace compile, contract suite, workspace tests.
+- `scripts/verify.sh` / `scripts/verify.ps1` blocks on: fmt, clippy, deps invariants, panic scan, unsafe audit（registry-synced）, workspace compile, contract suite, workspace tests.
 - perf/bench/native-completion are optional explicit gates (`SPARK_VERIFY_*`).
 - verify output now prints Linux status / Windows status / known gaps explicitly.
 
 ### Windows backend status is now explicit and unified
+- unsafe inventory is unified by `docs/UNSAFE_REGISTRY.md` (single source of truth), with shell + PowerShell audits enforcing documented `SAFETY` and registry bidirectional consistency.
 - `spark-transport-iocp` is classified as a **phase-0 compatibility layer**, not a native IOCP dataplane.
 - Default dataplane is wrapper mode (delegates readiness engine) and remains **not production-ready as native IOCP**.
 - Native completion remains an opt-in prototype (`--features native-completion`) for phase-x validation.
