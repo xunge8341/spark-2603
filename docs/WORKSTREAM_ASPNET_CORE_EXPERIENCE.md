@@ -150,3 +150,11 @@ where
   - overload reject（按 policy）-> 429/503；
   - drain with inflight：drain 后拒绝新请求，在途请求按 deadline 收敛。
 - 目标不是替代 service-level，而是形成“逻辑回归 + 数据面集成”双保险。
+
+
+## 最新进展（T7.3：硬化 compile gate 与扩展面防腐）
+- verify 主流程新增 examples compile gate：`cargo test --workspace --examples --no-run --locked`（shell/PowerShell 双端一致），将 `spark-dist-mio/examples/*` 变成“至少可编译”的持续约束，而不是仅靠人工运行。
+- 扩展面一致性复核保持不变：
+  - transport：`ChannelPipelineBuilder`、`ChannelHandler`、`AppServiceOptions`、`OverloadAction`；
+  - host：`HostBuilder`、`ServerConfig`、`MgmtGroup`、`EndpointBuilder`。
+- `crates/spark-ember/src/http1/transport_server.rs` 清理无执行语义的冗余字段，避免文档/配置与实现产生“看起来生效、实际未读”的漂移。

@@ -262,15 +262,19 @@ Invoke-Step "[5b/8] unsafe audit (documented + registry-synced)" {
   & .\scripts\unsafe_audit.ps1
 }
 
-Invoke-Step "[6/8] cargo test --workspace --no-run --locked (compile gate)" {
+Invoke-Step "[6/9] cargo test --workspace --no-run --locked (compile gate)" {
   cargo test --workspace --no-run --locked
 }
 
-Invoke-Step "[7/8] contract suite gate (spark-transport-contract)" {
+Invoke-Step "[7/9] cargo test --workspace --examples --no-run --locked (example compile gate)" {
+  cargo test --workspace --examples --no-run --locked
+}
+
+Invoke-Step "[8/9] contract suite gate (spark-transport-contract)" {
   cargo test -p spark-transport-contract --locked
 }
 
-Invoke-Step "[8/8] cargo test --workspace (excluding contract suite)" {
+Invoke-Step "[9/9] cargo test --workspace (excluding contract suite)" {
   cargo test --workspace --exclude spark-transport-contract --locked
 }
 

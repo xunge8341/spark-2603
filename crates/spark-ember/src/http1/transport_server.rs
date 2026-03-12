@@ -139,7 +139,6 @@ impl TransportServer {
             drain_timeout: self.profile.request_timeouts.default_timeout,
             max_inflight: self.profile.overload.max_concurrent_requests,
             queue_limit: self.profile.overload.queue_limit,
-            max_inflight_per_connection: self.profile.overload.max_inflight_per_connection,
             reject_policy: self.profile.overload.reject_policy,
             inflight: AtomicUsize::new(0),
             queued: AtomicUsize::new(0),
@@ -187,7 +186,6 @@ pub struct HttpMgmtService {
     drain_timeout: std::time::Duration,
     max_inflight: usize,
     queue_limit: usize,
-    max_inflight_per_connection: usize,
     reject_policy: spark_host::mgmt_profile::MgmtRejectPolicy,
     inflight: AtomicUsize,
     queued: AtomicUsize,
@@ -207,10 +205,6 @@ impl std::fmt::Debug for HttpMgmtService {
             .field("drain_timeout", &self.drain_timeout)
             .field("max_inflight", &self.max_inflight)
             .field("queue_limit", &self.queue_limit)
-            .field(
-                "max_inflight_per_connection",
-                &self.max_inflight_per_connection,
-            )
             .field("reject_policy", &self.reject_policy)
             .finish()
     }
@@ -416,7 +410,6 @@ mod tests {
             drain_timeout: default_request_timeout,
             max_inflight,
             queue_limit,
-            max_inflight_per_connection: 1,
             reject_policy,
             inflight: AtomicUsize::new(0),
             queued: AtomicUsize::new(0),
