@@ -26,6 +26,7 @@
 - 以“当前全绿工作区”为唯一事实基线；不要混用历史 zip 覆盖 + patch 叠加。
 - `Cargo.lock` 与 `--locked`：一旦更新 lockfile，必须纳入提交；不要被 zip 覆盖回旧版本。
 - Windows 上补丁文件若由 PowerShell 生成，注意避免 UTF-16 编码导致 `git apply` 报 garbage。
+- 仓库级执行约束已固化到 `AGENTS.md`，包含跨安全边界业务交换网关的协议边界（SIP JSON body / RTP 定长头+TLV / `api_code` 受控路由）与工程红线；新任务开始前先对齐该文档。
 
 ## 建议的推进节奏
 - BigStep-29：优先把 RX 双拷贝降为单拷贝（risk low, value high）。

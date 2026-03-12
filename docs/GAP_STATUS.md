@@ -100,3 +100,9 @@ This document is the trunk baseline. It must match code and verification scripts
   - transport pipeline 继续以 `ChannelPipelineBuilder` / `ChannelHandler` / `AppServiceOptions` / `OverloadAction` 为稳定入口；
   - host 层继续以 `HostBuilder` / `ServerConfig` / `MgmtGroup` / `EndpointBuilder` 为稳定入口。
 - `transport_server.rs` 清理仅用于结构体占位、未参与运行路径的冗余字段，避免后续维护误判为“有效治理开关”。
+
+## Update T7.4（仓库级执行约束固化）
+- 新增仓库级 `AGENTS.md`，将 Codex 项目执行边界与工程红线收敛为单一事实来源。
+- 明确跨安全边界业务交换网关约束：SIP JSON body、RTP 定长主头+TLV、`api_code` 受控 HTTP 路由模板执行、签名算法升级位预留。
+- 固化 Rust 工程约束：panic-free、`unsafe` 受控边界、`--locked` 与 lockfile 一致性、最小公开 API 与指标命名集中化。
+- `docs/NEW_SESSION_START_HERE.md` 已加入入口提示，要求新任务先对齐仓库级 `AGENTS.md`。
