@@ -685,3 +685,15 @@
 - 当前 trunk 已具备 pipeline builder、group/route timeout、metrics/logging 风格示例，但缺少“稳定入口 vs internal”边界文本，导致外部调用方容易误依赖内部路径。
 - 通过“最小公开 + 文档契约 + 示例”可在不改变 dataplane 热路径语义/性能的前提下，降低扩展使用歧义。
 - 保持“只整理口子，不抢做生态”的范围控制：不新增抽象层，不扩散 trait 体系。
+
+## Iteration 18（脚本收口）：perf gate 单核心驱动 + Windows 依赖显式化（2026-03-11）
+
+### 决策
+- 新增 `scripts/perf_gate_core.py` 作为跨平台单一核心，统一 baseline 解析、report JSON 对比与失败输出。
+- `scripts/perf_gate.sh` 与 `scripts/perf_gate.ps1` 收敛为薄包装，只负责参数拼装与依赖预检查。
+- Windows 保留通过 `bash ./scripts/perf_report.sh` 生成 report 的既有 contract，但在入口显式检查 `bash` 与 Python 3 并给出可操作错误提示。
+
+### 依据
+- 当前风险主要来自 sh/ps1 复制逻辑漂移；单核心可直接消除比较规则分叉。
+- benchmark 体系与 report contract 已稳定，重写 report 生成路径成本高且风险不必要；先做入口收口与依赖透明化性价比最高。
+- verify（opt-in）与 nightly（default-on）职责边界应保持不变，以维持日常反馈速度和夜间回归阻断能力。

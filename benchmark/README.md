@@ -50,11 +50,32 @@ Perf gate baselines live under `perf/baselines/`:
 - `perf_gate_unix.json`: Unix-first thresholds.
 - `perf_gate_default.json`: fallback when platform-specific file is unavailable.
 
-Resolution order in `perf_gate.{sh,ps1}`:
+Resolution order in `scripts/perf_gate_core.py`:
 
 1. `SPARK_PERF_BASELINE` (explicit override)
 2. platform baseline (`perf_gate_windows.json` / `perf_gate_unix.json`)
 3. `perf_gate_default.json`
+
+## Perf gate architecture (single core, thin wrappers)
+
+- `scripts/perf_gate_core.py`: shared core for baseline resolution + JSON comparison.
+- `scripts/perf_gate.sh`: Unix thin wrapper; dependency precheck + invoke core.
+- `scripts/perf_gate.ps1`: Windows thin wrapper; dependency precheck + invoke core.
+
+This reduces script drift: sh/ps1 no longer each maintain their own comparison implementation.
+
+## Dependency matrix
+
+| Entry | Linux/macOS | Windows PowerShell |
+| --- | --- | --- |
+| `scripts/perf_report.sh` | `bash`, `cargo` | `bash`, `cargo` |
+| `scripts/perf_gate.sh` | `python3`, `bash`, `cargo` | n/a |
+| `scripts/perf_gate.ps1` | n/a | `python3` (or `py -3` / `python`), `bash`, `cargo` |
+
+Notes:
+
+- Windows perf gate still calls `scripts/perf_report.sh` through `bash`; this is explicit and prechecked.
+- Missing dependency failures are designed to be actionable (which binary is missing + how to install/provide it).
 
 ## Scenario definitions
 
@@ -65,10 +86,12 @@ Current perf matrix:
 - `slow_consumer`: stresses backpressure/queueing with reduced consume pace.
 - `high_concurrency_short_conn`: many short-lived exchanges to exercise scheduling overhead.
 
-## Where perf gate runs by default
+## Verify vs nightly responsibility boundary
 
-- `scripts/verify.sh` / `scripts/verify.ps1`: **opt-in** (`SPARK_VERIFY_PERF_GATE=1`) to keep day-to-day checks fast and stable.
-- `scripts/verify_nightly.sh` / `scripts/verify_nightly.ps1`: perf gate enabled by default.
+- `scripts/verify.sh` / `scripts/verify.ps1`: **perf gate opt-in** (`SPARK_VERIFY_PERF_GATE=1`) to keep PR/local checks deterministic and faster.
+- `scripts/verify_nightly.sh` / `scripts/verify_nightly.ps1`: **perf gate default-on** to block regressions in the heavier nightly path.
+
+This split keeps developer feedback loops short while still enforcing perf baselines on scheduled gates.
 
 ## Local validation commands
 
