@@ -57,6 +57,9 @@ This document is the trunk baseline. It must match code and verification scripts
 - 基线按 Unix/Windows 分离，显式避免“Linux 最优数字外推所有平台”。
 - PowerShell perf gate 已与 shell 口径统一：同样走 `perf_report` JSON/CSV 合同，并按 scenario/global 双层阈值阻断。
 - nightly 路径（`verify_nightly.sh/.ps1`）默认开启 perf gate，普通 verify 继续保持可选。
+- perf gate 脚本完成“单核心收口”：新增 `scripts/perf_gate_core.py` 承担 baseline 解析与 JSON 对比，`perf_gate.sh/.ps1` 仅保留薄包装与依赖预检查，避免 sh/ps1 逻辑分叉。
+- Windows/PowerShell 路径显式声明并预检查依赖：`bash`（用于 `perf_report.sh`）与 Python 3（`python3`/`py -3`/`python`），缺失时给出可操作错误提示。
+- `benchmark/README.md` 补齐依赖矩阵与 verify/nightly 职责边界说明，明确普通 verify 保持 opt-in、nightly 默认阻断的原因。
 
 ## Update T5（主干并发与过载治理）
 - `AppServiceHandler` 从“单 inflight + 无上界 queue”升级为可配置模型：`max_inflight_per_connection` + `max_queue_per_connection` + `overload_action`（FailFast / Backpressure / CloseConnection）。
