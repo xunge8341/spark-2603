@@ -92,3 +92,11 @@ This document is the trunk baseline. It must match code and verification scripts
 - 新增 overload 压力路径验证（受限并发/队列 + reject policy），在真实 transport 路径断言 429/503 语义。
 - 新增 drain + inflight 收敛验证：先进入在途，再触发 `/drain`，新请求被拒绝且在途请求按 timeout deadline 收敛。
 - 文档上明确“service-level 覆盖用于逻辑快速回归；E2E 覆盖用于 transport/dataplane 集成语义验收”。
+
+
+## Update T7.3（小型硬化：examples compile gate + 扩展面一致性）
+- `scripts/verify.sh` 与 `scripts/verify.ps1` 新增 `cargo test --workspace --examples --no-run --locked`，将最小示例纳入默认编译门禁，防止示例随主干 API 漂移后静默腐烂。
+- 对扩展面文档与公开 re-export 做对齐复核：
+  - transport pipeline 继续以 `ChannelPipelineBuilder` / `ChannelHandler` / `AppServiceOptions` / `OverloadAction` 为稳定入口；
+  - host 层继续以 `HostBuilder` / `ServerConfig` / `MgmtGroup` / `EndpointBuilder` 为稳定入口。
+- `transport_server.rs` 清理仅用于结构体占位、未参与运行路径的冗余字段，避免后续维护误判为“有效治理开关”。

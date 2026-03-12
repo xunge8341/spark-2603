@@ -64,13 +64,16 @@ bash ./scripts/panic_scan.sh
 echo "[4.5/7] unsafe audit (documented + confined)"
 bash ./scripts/unsafe_audit.sh
 
-echo "[5/7] cargo test --workspace --no-run --locked (compile gate)"
+echo "[5/8] cargo test --workspace --no-run --locked (compile gate)"
 cargo test --workspace --no-run --locked
 
-echo "[6/7] contract suite gate (spark-transport-contract)"
+echo "[6/8] cargo test --workspace --examples --no-run --locked (example compile gate)"
+cargo test --workspace --examples --no-run --locked
+
+echo "[7/8] contract suite gate (spark-transport-contract)"
 cargo test -p spark-transport-contract --locked
 
-echo "[7/7] cargo test --workspace (excluding contract suite)"
+echo "[8/8] cargo test --workspace (excluding contract suite)"
 cargo test --workspace --exclude spark-transport-contract --locked
 
 
